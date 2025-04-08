@@ -212,6 +212,7 @@ this.coin = this.get_coin(
   Poll for arrow keys to move the spaceship.
   */
   update() {
+    const delta = this.game.loop.delta; // Time delta for consistent movement
     const keys = this.keys;
     let newState = "00000";
 
@@ -221,6 +222,23 @@ this.coin = this.get_coin(
     if (keys.left.isDown) newState = newState.substring(0, 2) + "1" + newState.substring(3);
     if (keys.right.isDown) newState = newState.substring(0, 3) + "1" + newState.substring(4);
     if (Phaser.Input.Keyboard.JustDown(this.space)) newState = newState.substring(0, 4) + "1";
+    if (Phaser.Input.Keyboard.JustUp(this.space)) newState = newState.substring(0, 4) + "0";
+    if (Phaser.Input.Keyboard.JustUp(keys.up)) newState = newState.substring(0, 0) + "0" + newState.substring(1);
+    if (Phaser.Input.Keyboard.JustUp(keys.down)) newState = newState.substring(0, 1) + "0" + newState.substring(2);
+    if (Phaser.Input.Keyboard.JustUp(keys.left)) newState = newState.substring(0, 2) + "0" + newState.substring(3);
+    if (Phaser.Input.Keyboard.JustUp(keys.right)) newState = newState.substring(0, 3) + "0" + newState.substring(4);
+
+    // Emit shot event if space is pressed
+    if (newState[4] === "1") {
+      this.shot_sound.play();
+      this.bullets.fireBullet(
+        this.ship.cont.x,
+        this.ship.cont.y,
+        this.ship.ship.angle,
+        () => {}
+      );
+      this.socket.emit("shot", { x: this.ship.cont.x, y: this.ship.cont.y });
+    }
 
     // Emit keystroke state if it has changed
     if (newState !== this.keystrokeState) {
@@ -229,23 +247,49 @@ this.coin = this.get_coin(
     }
 
     // Update local player position based on keystroke state
-    this.updatePlayerPosition(this.keystrokeState, this.ship);
+    this.updatePlayerPosition(this.keystrokeState, this.ship, delta);
 
     // Update other players' positions based on their keystroke states
     for (const id in this.othersKeystrokes) {
-      this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship);
+      this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
     }
 
     this.emit_coordinates();
   }
 
-  updatePlayerPosition(state, ship) {
-    const speed = 7;
-    if (state[0] === "1") ship.cont.y -= speed; // Up
-    if (state[1] === "1") ship.cont.y += speed; // Down
-    if (state[2] === "1") ship.cont.x -= speed; // Left
-    if (state[3] === "1") ship.cont.x += speed; // Right
-    if (state[4] === "1") this.bullets.fireBullet(ship.cont.x, ship.cont.y - 5, ship.ship.angle, () => {});
+  updatePlayerPosition(state, ship, delta) {
+    const speed = 1000; // Base speed in pixels per second
+    let dx = 0;
+    let dy = 0;
+
+    // Determine movement direction and set angle
+    if (state[0] === "1") { // Up
+      dy -= 1;
+      ship.ship.setAngle(-90);
+    }
+    if (state[1] === "1") { // Down
+      dy += 1;
+      ship.ship.setAngle(90);
+    }
+    if (state[2] === "1") { // Left
+      dx -= 1;
+      ship.ship.setAngle(180);
+    }
+    if (state[3] === "1") { // Right
+      dx += 1;
+      ship.ship.setAngle(0);
+    }
+
+    // Normalize diagonal movement
+    const magnitude = Math.sqrt(dx * dx + dy * dy);
+    if (magnitude > 0) {
+      dx /= magnitude;
+      dy /= magnitude;
+    }
+
+    // Apply movement with time delta factor
+    ship.cont.x += dx * speed * (delta / 1000);
+    ship.cont.y += dy * speed * (delta / 1000);
   }
 
   /*
