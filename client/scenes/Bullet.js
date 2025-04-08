@@ -10,17 +10,18 @@ export default class Bullet extends Phaser.Physics.Arcade.Sprite {
   }
 
   fire(x, y, angle) {
-    const speed = 2800;
+    const speed = 500;
     const radianAngle = Phaser.Math.DegToRad(angle); // Convert angle to radians
     const velocityX = Math.cos(radianAngle) * speed;
     const velocityY = Math.sin(radianAngle) * speed;
 
     this.body.reset(x, y);
-    this.setAngle(angle);
+    this.setAngle(angle - 270);
     this.setActive(true);
     this.setVisible(true);
     this.setVelocityX(velocityX);
     this.setVelocityY(velocityY);
+    this.index = this.scene.bullets.get_all_bullets().length - 1; // Assign index
   }
 
   preUpdate(time, delta) {

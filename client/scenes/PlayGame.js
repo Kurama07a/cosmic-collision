@@ -29,7 +29,7 @@ class PlayGame extends Phaser.Scene {
     );
     this.score = 0;
     this.others = {}; //to store other players
-    this.keystrokeState = "00000"; // Binary string for up, down, left, right, fire
+    this.keystrokeState = "000000"; // Binary string for up, down, left, right, fire, collision
     this.othersKeystrokes = {}; // Map of other players' keystroke states
     this.x = Phaser.Math.Between(50, Constants.WIDTH - 50); // Use dynamic width
     this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50); // Use dynamic height
@@ -214,7 +214,7 @@ this.coin = this.get_coin(
   update() {
     const delta = this.game.loop.delta; // Time delta for consistent movement
     const keys = this.keys;
-    let newState = "00000";
+    let newState = "000000"; // Add a new state for bullet collision
 
     // Update keystroke state based on key presses
     if (keys.up.isDown) newState = newState.substring(0, 0) + "1" + newState.substring(1);
@@ -230,20 +230,20 @@ this.coin = this.get_coin(
 
     // Emit shot event if space is pressed
     if (newState[4] === "1") {
-      this.shot_sound.play();
-      this.bullets.fireBullet(
-        this.ship.cont.x,
-        this.ship.cont.y,
-        this.ship.ship.angle,
-        () => {}
-      );
-      this.socket.emit("shot", { x: this.ship.cont.x, y: this.ship.cont.y });
+        this.shot_sound.play();
+        this.bullets.fireBullet(
+            this.ship.cont.x,
+            this.ship.cont.y,
+            this.ship.ship.angle - 90,
+            () => {}
+        );
+        this.socket.emit("shot", { x: this.ship.cont.x, y: this.ship.cont.y });
     }
 
     // Emit keystroke state if it has changed
     if (newState !== this.keystrokeState) {
-      this.keystrokeState = newState;
-      this.socket.emit("keystroke_state", newState);
+        this.keystrokeState = newState;
+        this.socket.emit("keystroke_state", newState);
     }
 
     // Update local player position based on keystroke state
@@ -251,14 +251,34 @@ this.coin = this.get_coin(
 
     // Update other players' positions based on their keystroke states
     for (const id in this.othersKeystrokes) {
-      this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
+        this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
     }
+
+    // Check for bullet collisions with other players
+    this.checkBulletCollisions();
 
     this.emit_coordinates();
   }
 
+  checkBulletCollisions() {
+    this.bullets.children.each((bullet) => {
+        if (bullet.active) {
+            for (const id in this.others) {
+                const other = this.others[id];
+                if (Phaser.Geom.Intersects.RectangleToRectangle(bullet.getBounds(), other.ship.cont.getBounds())) {
+                    bullet.set_bullet(false);
+                    this.socket.emit("collision", { bullet_user_id: this.id, bullet_index: bullet.index, target_id: id });
+                    this.animate_explosion(id);
+                    other.score = Math.max(0, other.score - 2); // Reduce score
+                    other.ship.score_text.setText(`${other.name}: ${other.score}`);
+                }
+            }
+        }
+    });
+  }
+
   updatePlayerPosition(state, ship, delta) {
-    const speed = 1000; // Base speed in pixels per second
+    const speed = 100; // Base speed in pixels per second
     let dx = 0;
     let dy = 0;
 
@@ -291,8 +311,9 @@ this.coin = this.get_coin(
   spaceship sprite, name and score.
   */
   get_new_spaceship = (x, y, score, name, angle) => {
+    var randomColor = Phaser.Display.Color.RandomRGB()._color; // Generate a random color
     var score_text = this.add.text(-30, 25, `${name}: ${score}`, {
-      color: "#00ff00",
+      color: randomColor,
       align: "center",
       fontSize: "13px",
     });

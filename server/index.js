@@ -106,11 +106,15 @@ io.on("connect", (socket) => {
   });
 
   socket.on("collision", (params, callback) => {
-    socket.broadcast.emit("other_collision", {
-      bullet_user_id: params.bullet_user_id,
-      bullet_index: params.bullet_index,
-      exploded_user_id: socket.id,
-    });
+    const { bullet_user_id, bullet_index, target_id } = params;
+    if (all_users[target_id]) {
+        all_users[target_id].score = Math.max(0, all_users[target_id].score - 2); // Reduce score
+        io.emit("other_collision", {
+            bullet_user_id,
+            bullet_index,
+            exploded_user_id: target_id,
+        });
+    }
   });
 
   /*
