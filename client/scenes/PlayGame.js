@@ -262,29 +262,23 @@ this.coin = this.get_coin(
     let dx = 0;
     let dy = 0;
 
-    // Determine movement direction and set angle
-    if (state[0] === "1") { // Up
-      dy -= 1;
-      ship.ship.setAngle(-90);
-    }
-    if (state[1] === "1") { // Down
-      dy += 1;
-      ship.ship.setAngle(90);
-    }
-    if (state[2] === "1") { // Left
-      dx -= 1;
-      ship.ship.setAngle(180);
-    }
-    if (state[3] === "1") { // Right
-      dx += 1;
-      ship.ship.setAngle(0);
-    }
+    // Determine movement direction
+    if (state[0] === "1") dy -= 1; // Up
+    if (state[1] === "1") dy += 1; // Down
+    if (state[2] === "1") dx -= 1; // Left
+    if (state[3] === "1") dx += 1; // Right
 
     // Normalize diagonal movement
     const magnitude = Math.sqrt(dx * dx + dy * dy);
     if (magnitude > 0) {
-      dx /= magnitude;
-      dy /= magnitude;
+        dx /= magnitude;
+        dy /= magnitude;
+    }
+
+    // Set angle based on movement direction
+    if (dx !== 0 || dy !== 0) {
+        const angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+        ship.ship.setAngle(angle + 90); // Adjust angle to match sprite orientation
     }
 
     // Apply movement with time delta factor
