@@ -22,8 +22,6 @@ class PlayGame extends Phaser.Scene {
     }
     console.log(this.ENDPOINT);
 
-
-
     this.name = name;
     this.keys = this.input.keyboard.createCursorKeys();
     this.space = this.input.keyboard.addKey(
@@ -31,9 +29,10 @@ class PlayGame extends Phaser.Scene {
     );
     this.score = 0;
     this.others = {}; //to store other players
-// In init() or create()
-this.x = Phaser.Math.Between(50, Constants.WIDTH - 50); // Use dynamic width
-this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50); // Use dynamic height
+    this.keystrokeState = "00000"; // Binary string for up, down, left, right, fire
+    this.othersKeystrokes = {}; // Map of other players' keystroke states
+    this.x = Phaser.Math.Between(50, Constants.WIDTH - 50); // Use dynamic width
+    this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50); // Use dynamic height
   }
 
   /* Load assets */
@@ -202,57 +201,51 @@ this.coin = this.get_coin(
       this.others[params.id].ship.cont.destroy();
       delete this.others[params.id];
     });
+
+    // Listen for keystroke updates from the server
+    this.socket.on("keystroke_update", ({ id, state }) => {
+      this.othersKeystrokes[id] = state;
+    });
   }
 
   /*
   Poll for arrow keys to move the spaceship.
   */
   update() {
-    const cont = this.ship.cont;
-    const ship = this.ship.ship;
-    const inc = 7;
-    var keys_down = "";
-    if (this.keys.down.isDown && cont.active) {
-      cont.y += inc;
-      keys_down += "d";
+    const keys = this.keys;
+    let newState = "00000";
+
+    // Update keystroke state based on key presses
+    if (keys.up.isDown) newState = newState.substring(0, 0) + "1" + newState.substring(1);
+    if (keys.down.isDown) newState = newState.substring(0, 1) + "1" + newState.substring(2);
+    if (keys.left.isDown) newState = newState.substring(0, 2) + "1" + newState.substring(3);
+    if (keys.right.isDown) newState = newState.substring(0, 3) + "1" + newState.substring(4);
+    if (Phaser.Input.Keyboard.JustDown(this.space)) newState = newState.substring(0, 4) + "1";
+
+    // Emit keystroke state if it has changed
+    if (newState !== this.keystrokeState) {
+      this.keystrokeState = newState;
+      this.socket.emit("keystroke_state", newState);
     }
-    if (this.keys.up.isDown && cont.active) {
-      cont.y -= inc;
-      keys_down += "u";
+
+    // Update local player position based on keystroke state
+    this.updatePlayerPosition(this.keystrokeState, this.ship);
+
+    // Update other players' positions based on their keystroke states
+    for (const id in this.othersKeystrokes) {
+      this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship);
     }
-    if (this.keys.right.isDown && cont.active) {
-      cont.x += inc;
-      keys_down += "r";
-    }
-    if (this.keys.left.isDown && cont.active) {
-      cont.x -= inc;
-      keys_down += "l";
-    }
-    const keys_angle = {
-      u: 0,
-      d: 180,
-      l: 270,
-      r: 90,
-      ur: 45,
-      ul: -45,
-      dr: 135,
-      dl: 225,
-    };
-    if (keys_down in keys_angle) {
-      ship.setAngle(keys_angle[keys_down]);
-    }
-    if (Phaser.Input.Keyboard.JustDown(this.space)) {
-      this.bullets.fireBullet(
-        this.ship.cont.x,
-        this.ship.cont.y - 5,
-        this.ship.ship.angle,
-        () => {
-          this.socket.emit("shot");
-          this.shot_sound.play();
-        }
-      );
-    }
+
     this.emit_coordinates();
+  }
+
+  updatePlayerPosition(state, ship) {
+    const speed = 7;
+    if (state[0] === "1") ship.cont.y -= speed; // Up
+    if (state[1] === "1") ship.cont.y += speed; // Down
+    if (state[2] === "1") ship.cont.x -= speed; // Left
+    if (state[3] === "1") ship.cont.x += speed; // Right
+    if (state[4] === "1") this.bullets.fireBullet(ship.cont.x, ship.cont.y - 5, ship.ship.angle, () => {});
   }
 
   /*

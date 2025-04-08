@@ -1,4 +1,3 @@
-
 ## Installation
 
 1. Clone the repository:
@@ -57,6 +56,10 @@ The server-side code is located in the `server` directory. It includes the follo
 ### Webpack Configuration
 
 The `webpack.config.js` file contains the configuration for Webpack, which is used to bundle the client-side code.
+
+### Keystroke-Based Movement
+
+The game now uses a keystroke-based system to reduce lag. Each client sends a binary string representing the state of keys (up, down, left, right, fire) to the server. The server broadcasts these states to all clients, and each client updates player positions locally based on the received states.
 
 ## License
 

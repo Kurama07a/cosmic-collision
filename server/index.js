@@ -30,6 +30,9 @@ var coin = { x: getRndInteger(50, Constants.WIDTH), y: getRndInteger(50, Constan
 //store user info, maps socket_id -> user object.
 var all_users = {}; 
 
+// Store keystroke states for all users
+var keystrokeStates = {};
+
 let screenDimensions = {
   width: Constants.WIDTH,
   height: Constants.HEIGHT,
@@ -37,6 +40,10 @@ let screenDimensions = {
 
 io.on("connect", (socket) => {
   numberOfConnectedUsers++;
+
+  // Initialize keystroke state for the new user
+  keystrokeStates[socket.id] = "00000"; // Default state: all keys unpressed
+
   socket.on("update_screen_dimensions", (dimensions) => {
     screenDimensions.width = dimensions.width;
     screenDimensions.height = dimensions.height;
@@ -79,6 +86,12 @@ io.on("connect", (socket) => {
     });
   });
 
+  // Broadcast keystroke state updates
+  socket.on("keystroke_state", (state) => {
+    keystrokeStates[socket.id] = state;
+    socket.broadcast.emit("keystroke_update", { id: socket.id, state });
+  });
+
   socket.on("shot", (p, c) => socket.broadcast.emit("other_shot"));
 
   /*
@@ -109,6 +122,7 @@ io.on("connect", (socket) => {
     socket.broadcast.emit("user_disconnected", {
       id: socket.id,
     });
+    delete keystrokeStates[socket.id];
     delete all_users[socket.id];
   });
 });
