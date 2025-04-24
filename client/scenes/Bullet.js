@@ -10,7 +10,7 @@ export default class Bullet extends Phaser.Physics.Arcade.Sprite {
   }
 
   fire(x, y, angle) {
-    const speed = 500;
+    const speed = 1500;
     const radianAngle = Phaser.Math.DegToRad(angle); // Convert angle to radians
     const velocityX = Math.cos(radianAngle) * speed;
     const velocityY = Math.sin(radianAngle) * speed;

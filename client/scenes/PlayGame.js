@@ -18,7 +18,7 @@ class PlayGame extends Phaser.Scene {
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
       this.ENDPOINT = "localhost:5000";
     } else {
-      this.ENDPOINT = "localhost.84:5000";
+      this.ENDPOINT = "localhost:5000";
     }
     console.log(this.ENDPOINT);
 
@@ -278,7 +278,7 @@ this.coin = this.get_coin(
   }
 
   updatePlayerPosition(state, ship, delta) {
-    const speed = 100; // Base speed in pixels per second
+    const speed = 800; // Base speed in pixels per second
     let dx = 0;
     let dy = 0;
 
