@@ -3,10 +3,22 @@ import Constants from "../constants";
 import starsBackground from "../assets/stars.png";
 
 export default class Winner extends Phaser.Scene {
-  init(players) {
-    this.players = players;
+  init(data) {
+    if (Array.isArray(data)) {
+      // Legacy support
+      this.players = data;
+      this.roomName = "Game";
+    } else {
+      // New room-aware format
+      this.players = data.players;
+      this.roomName = data.roomName;
+    }
+    
     this.enter = this.input.keyboard.addKey(
       Phaser.Input.Keyboard.KeyCodes.ENTER
+    );
+    this.backspace = this.input.keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.BACKSPACE
     );
   }
 
@@ -37,6 +49,15 @@ export default class Winner extends Phaser.Scene {
       align: 'center'
     }).setOrigin(0.5);
     container.add(title);
+
+    // Add room name display
+    const roomInfo = this.add.text(0, -panel.height/2 + 20, `ROOM: ${this.roomName}`, {
+      fontFamily: 'Arial',
+      fontSize: '18px',
+      color: '#AAAAAA',
+      align: 'center'
+    }).setOrigin(0.5);
+    container.add(roomInfo);
 
     // Add winner annoucement with pulsing effect
     const winnerName = this.players[0].name;
@@ -123,6 +144,16 @@ export default class Winner extends Phaser.Scene {
     
     container.add(instruction);
 
+    // Add button to go back to room selection
+    const backToRoomsButton = this.add.text(0, panel.height/2 - 20, 'Press BACKSPACE to return to room selection', {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#AAAAAA',
+      align: 'center'
+    }).setOrigin(0.5);
+    
+    container.add(backToRoomsButton);
+
     // Add particles for celebratory effect - using Phaser 3.60+ approach
     const particleTexture = this.makeParticleTexture();
     
@@ -154,6 +185,8 @@ export default class Winner extends Phaser.Scene {
     
     if (Phaser.Input.Keyboard.JustDown(this.enter)) {
       this.scene.start("playgame");
+    } else if (Phaser.Input.Keyboard.JustDown(this.backspace)) {
+      this.scene.start("roomselection");
     }
   }
 }

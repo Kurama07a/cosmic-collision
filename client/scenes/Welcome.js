@@ -348,7 +348,8 @@ export default class Welcome extends Phaser.Scene {
       // Start game on enter if name is not empty
       if (Phaser.Input.Keyboard.JustDown(this.enter) && this.name.trim().length > 0) {
         this.music.stop();
-        this.scene.start("playgame", this.name);
+        // Change this line to go to room selection instead of directly to the game
+        this.scene.start("roomselection", this.name);
       }
     }
   }

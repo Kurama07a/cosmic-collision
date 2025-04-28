@@ -12,31 +12,42 @@ import io from "socket.io-client";
 import background from "../assets/background.png";
 import starsBackground from "../assets/Space.png";
 import ClientPrediction from "./predictor";
-class PlayGame extends Phaser.Scene {
 
-  /* Initialize client connection to socket server*/
-  init(name) {
+class PlayGame extends Phaser.Scene {
+  /* Initialize client connection to socket server */
+  init(params) {
+    // Check if params is a string (for backward compatibility) or object
+    if (typeof params === 'string') {
+      this.name = params;
+      this.roomId = "main";
+      this.roomName = "Free-For-All";
+    } else {
+      this.name = params.playerName;
+      this.roomId = params.roomId;
+      this.roomName = params.roomName;
+    }
+
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
       this.ENDPOINT = "localhost:5000";
     } else {
       this.ENDPOINT = "localhost:5000";
     }
-    console.log(this.ENDPOINT);
 
-    this.name = name;
     this.keys = this.input.keyboard.createCursorKeys();
     this.space = this.input.keyboard.addKey(
       Phaser.Input.Keyboard.KeyCodes.SPACE
     );
     this.score = 0;
-    this.others = {}; //to store other players
+    this.others = {}; // to store other players
     this.keystrokeState = "000000"; // Binary string for up, down, left, right, fire, collision
     this.othersKeystrokes = {}; // Map of other players' keystroke states
-    this.x = Phaser.Math.Between(50, Constants.WIDTH - 50); // Use dynamic width
-    this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50); // Use dynamic height
+    this.x = Phaser.Math.Between(50, Constants.WIDTH - 50);
+    this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50);
+
+    // Use existing socket if available (from room selection)
+    this.socket = window.gameSocket || null;
   }
 
-  /* Load assets */
   preload() {
     this.load.image('background', background); // Ensure this path is correct
     this.load.image('space', starsBackground); // Add the same background as Welcome
@@ -53,20 +64,28 @@ class PlayGame extends Phaser.Scene {
     this.load.audio("coin", CoinSound);
   }
 
-
   create() {
-    this.socket = io(this.ENDPOINT); 
+    // If no socket exists (direct game start), create one
+    if (!this.socket) {
+      this.socket = io(this.ENDPOINT);
+    }
+
+    // Add room info display
+    this.createRoomInfoDisplay();
+
     const background = this.add.image(Constants.WIDTH / 2, Constants.HEIGHT / 2, 'background');
     background.setDisplaySize(Constants.WIDTH+50, Constants.HEIGHT+50);
     background.setDepth(-1);
     this.starfield = this.add.tileSprite(0, 0, Constants.WIDTH, Constants.HEIGHT, 'space')
         .setOrigin(0)
         .setDepth(-1);
-     this.socket = io(this.ENDPOINT);     
-     this.socket.emit("update_screen_dimensions", {
+
+    // Send screen dimensions to server
+    this.socket.emit("update_screen_dimensions", {
       width: Constants.WIDTH,
       height: Constants.HEIGHT,
     });
+
     /* Create sounds and animations */
     var config = {
       key: "explode",
@@ -89,41 +108,63 @@ class PlayGame extends Phaser.Scene {
       this.score,
       this.name,
       0
-    ); 
-   //connect to server.
+    );
+
     // Create bullet sprite-group
     this.bullets = new Bullets(this);
 
+    // Join room or get initialized in current room
+    if (this.roomId) {
+      // If coming from room selection, we're already in the room
+      // Just initialize the game state
+      this.socket.emit("initialize_game");
+    } else {
+      // Legacy path - join main room
+      this.socket.emit("join_room", { roomId: "main", name: this.name }, (response) => {
+        if (response.success) {
+          this.roomId = response.roomId;
+          this.roomName = response.roomName;
+          this.updateRoomInfoDisplay();
+          this.socket.emit("initialize_game");
+        }
+      });
+    }
+
     /*
-    This is recieved once for each new user, the user gets their id,
+    This is received once for each new user, the user gets their id,
     and a map of all other user objects.
     */
     this.socket.on("to_new_user", (params, callback) => {
       this.id = params.id;
-      this.others = params.others;
-
+      this.others = {};  // Initialize empty others object first
+      
       console.log("Coin position received from server:", params.coin);
-
+      
       // Use the coin position received from the server
       this.coin = this.get_coin(params.coin.x, params.coin.y);
-
-      for (const key of Object.keys(this.others)) {
-        const x = this.others[key].x;
-        const y = this.others[key].y;
-        const score = this.others[key].score;
-        const name = this.others[key].name;
-        const angle = this.others[key].angle;
-        const bullets = this.others[key].bullets;
-        this.others[key].ship = this.get_new_spaceship(
-          x,
-          y,
-          score,
-          name,
-          angle
-        );
-        this.others[key].bullets = this.get_enemy_bullets(bullets, key);
-        this.others[key].score = score;
-        this.others[key].name = name;
+      
+      // Process other players received from the server
+      for (const key of Object.keys(params.others)) {
+        // Skip self - this prevents creating a duplicate of your own ship
+        if (key === this.id) continue;
+        
+        const other = params.others[key];
+        const x = other.x;
+        const y = other.y;
+        const score = other.score;
+        const name = other.name;
+        const angle = other.angle;
+        const bullets = other.bullets || [];
+        
+        // Create ship for other player
+        this.others[key] = {
+          x: x,
+          y: y,
+          ship: this.get_new_spaceship(x, y, score, name, angle),
+          bullets: this.get_enemy_bullets(bullets, key),
+          score: score,
+          name: name,
+        };
         this.check_for_winner(score);
       }
 
@@ -206,6 +247,24 @@ class PlayGame extends Phaser.Scene {
     // Listen for keystroke updates from the server
     this.socket.on("keystroke_update", ({ id, state }) => {
       this.othersKeystrokes[id] = state;
+    });
+
+    // Handle disconnect and reconnect
+    this.socket.on("disconnect", () => {
+      this.showDisconnectedMessage();
+    });
+
+    // Add a back button to return to room selection
+    this.backButton = this.add.text(
+      50, 50, "< BACK", {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#AAAAAA',
+        backgroundColor: '#000000',
+        padding: { x: 10, y: 5 }
+      }
+    ).setInteractive().on('pointerdown', () => {
+      this.leaveRoom();
     });
   }
 
@@ -465,9 +524,82 @@ class PlayGame extends Phaser.Scene {
       }
       players = players.sort((a, b) => b.score - a.score);
       setTimeout(() => this.socket.disconnect(), 20);
-      this.scene.start("winner", players);
+      this.scene.start("winner", {
+        players,
+        roomName: this.roomName
+      });
     }
   };
+
+  // Create info display for current room
+  createRoomInfoDisplay() {
+    const background = this.add.image(Constants.WIDTH / 2, Constants.HEIGHT / 2, 'background');
+    background.setDisplaySize(Constants.WIDTH+50, Constants.HEIGHT+50);
+    background.setDepth(-1);
+    
+    this.starfield = this.add.tileSprite(0, 0, Constants.WIDTH, Constants.HEIGHT, 'space')
+      .setOrigin(0)
+      .setDepth(-1);
+      
+    this.roomInfoBg = this.add.rectangle(
+      Constants.WIDTH - 150, 
+      40, 
+      280, 
+      50, 
+      0x000000, 
+      0.7
+    ).setOrigin(0.5);
+    
+    this.roomInfoText = this.add.text(
+      Constants.WIDTH - 150, 
+      40, 
+      `ROOM: ${this.roomName}`, {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#FFE81F',
+        align: 'center'
+      }
+    ).setOrigin(0.5);
+  }
+  
+  updateRoomInfoDisplay() {
+    if (this.roomInfoText) {
+      this.roomInfoText.setText(`ROOM: ${this.roomName}`);
+    }
+  }
+  
+  showDisconnectedMessage() {
+    const overlay = this.add.rectangle(
+      Constants.WIDTH / 2, 
+      Constants.HEIGHT / 2, 
+      Constants.WIDTH, 
+      Constants.HEIGHT, 
+      0x000000, 
+      0.8
+    );
+    
+    const message = this.add.text(
+      Constants.WIDTH / 2, 
+      Constants.HEIGHT / 2, 
+      'DISCONNECTED FROM SERVER\nReturning to menu in 5 seconds...', {
+        fontFamily: 'Arial',
+        fontSize: '32px',
+        color: '#FF3333',
+        align: 'center'
+      }
+    ).setOrigin(0.5);
+    
+    this.time.delayedCall(5000, () => {
+      this.scene.start('welcome');
+    });
+  }
+  
+  leaveRoom() {
+    if (this.socket) {
+      this.socket.disconnect();
+    }
+    this.scene.start('roomselection', this.name);
+  }
 }
 
 export default PlayGame;

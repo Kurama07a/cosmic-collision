@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import PlayGame from "./scenes/PlayGame";
 import Welcome from "./scenes/Welcome";
 import Winner from "./scenes/Winner";
+import RoomSelection from "./scenes/RoomSelection";
 import Constants from "./constants";
 
 // Custom starfield shader
@@ -68,6 +69,7 @@ const config = {
 
 const game = new Phaser.Game(config);
 
+game.scene.add("roomselection", RoomSelection);
 game.scene.add("playgame", PlayGame);
 game.scene.add("welcome", Welcome);
 game.scene.add("winner", Winner);
