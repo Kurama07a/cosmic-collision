@@ -10,6 +10,7 @@ import CoinSound from "../assets/coin_collect.wav";
 import Constants from "../constants";
 import io from "socket.io-client";
 import background from "../assets/background.png";
+import starsBackground from "../assets/Space.png";
 import ClientPrediction from "./predictor";
 class PlayGame extends Phaser.Scene {
 
@@ -37,7 +38,8 @@ class PlayGame extends Phaser.Scene {
 
   /* Load assets */
   preload() {
-    this.load.image('background', background);
+    this.load.image('background', background); // Ensure this path is correct
+    this.load.image('space', starsBackground); // Add the same background as Welcome
     this.load.spritesheet("boom", Explosion, {
       frameWidth: 64,
       frameHeight: 64,
@@ -57,6 +59,9 @@ class PlayGame extends Phaser.Scene {
     const background = this.add.image(Constants.WIDTH / 2, Constants.HEIGHT / 2, 'background');
     background.setDisplaySize(Constants.WIDTH+50, Constants.HEIGHT+50);
     background.setDepth(-1);
+    this.starfield = this.add.tileSprite(0, 0, Constants.WIDTH, Constants.HEIGHT, 'space')
+        .setOrigin(0)
+        .setDepth(-1);
      this.socket = io(this.ENDPOINT);     
      this.socket.emit("update_screen_dimensions", {
       width: Constants.WIDTH,
@@ -96,9 +101,12 @@ class PlayGame extends Phaser.Scene {
     this.socket.on("to_new_user", (params, callback) => {
       this.id = params.id;
       this.others = params.others;
-      /*
-      Render the spaceships of all other users, and coin object.
-      */
+
+      console.log("Coin position received from server:", params.coin);
+
+      // Use the coin position received from the server
+      this.coin = this.get_coin(params.coin.x, params.coin.y);
+
       for (const key of Object.keys(this.others)) {
         const x = this.others[key].x;
         const y = this.others[key].y;
@@ -118,14 +126,7 @@ class PlayGame extends Phaser.Scene {
         this.others[key].name = name;
         this.check_for_winner(score);
       }
-      // In create() or wherever you spawn the coin
-this.coin = this.get_coin(
-  Phaser.Math.Between(50, Constants.WIDTH - 50), // Use dynamic width
-  Phaser.Math.Between(50, Constants.HEIGHT - 50) // Use dynamic height
-);
-      /*
-      Update server with coordinates.
-      */
+
       this.emit_coordinates();
     });
 
@@ -313,7 +314,8 @@ this.coin = this.get_coin(
   get_new_spaceship = (x, y, score, name, angle) => {
     var randomColor = Phaser.Display.Color.RandomRGB()._color; // Generate a random color
     var score_text = this.add.text(-30, 25, `${name}: ${score}`, {
-      color: randomColor,
+      color: "#00FF00",
+      fontFamily: "Arial",
       align: "center",
       fontSize: "13px",
     });
@@ -346,7 +348,9 @@ this.coin = this.get_coin(
   and the clients ship.
   */
   get_coin = (x, y) => {
+    console.log("Initializing coin at:", x, y);
     var coin = this.add.sprite(x, y, "coin");
+    coin.setDepth(1); // Ensure the coin is rendered above other elements
     this.physics.add.existing(coin, false);
     this.physics.add.collider(coin, this.ship.ship, this.fire, null, this);
     return coin;

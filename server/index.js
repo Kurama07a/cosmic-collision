@@ -55,12 +55,10 @@ io.on("connect", (socket) => {
   */
   socket.emit("to_new_user", {
     id: socket.id,
-    coin: {
-      x: Math.floor(Math.random() * screenDimensions.width),
-      y: Math.floor(Math.random() * screenDimensions.height),
-    },
+    coin, // Send the current coin position from the server
     others: all_users,
   });
+  console.log("Coin sent to new user:", coin);
   
 
   /*
