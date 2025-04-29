@@ -55,8 +55,13 @@ const lightFlareShader = {
 
 const config = {
   type: Phaser.AUTO,
-  width: Constants.WIDTH,
-  height: Constants.HEIGHT,
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    parent: 'game',
+    width: Constants.WIDTH,
+    height: Constants.HEIGHT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
   physics: { default: "arcade" },
   backgroundColor: "#202830",
   render: {
@@ -74,6 +79,10 @@ game.scene.add("playgame", PlayGame);
 game.scene.add("welcome", Welcome);
 game.scene.add("winner", Winner);
 game.scene.start("welcome");
+
+// Listen for resize events to update game dimensions
 window.addEventListener('resize', () => {
-  game.scale.resize(window.innerWidth, window.innerHeight);
+  // Scale manager handles the resizing automatically
+  // We just need to update any custom UI elements or calculations
+  game.events.emit('resize', Constants.WIDTH, Constants.HEIGHT);
 });

@@ -266,6 +266,9 @@ class PlayGame extends Phaser.Scene {
     ).setInteractive().on('pointerdown', () => {
       this.leaveRoom();
     });
+
+    // Listen for resize events
+    this.scale.on('resize', this.resize, this);
   }
 
   /*
@@ -599,6 +602,30 @@ class PlayGame extends Phaser.Scene {
       this.socket.disconnect();
     }
     this.scene.start('roomselection', this.name);
+  }
+
+  // Resize method to handle screen resizing
+  resize(gameSize, baseSize, displaySize, resolution) {
+    // Update background and other resizable elements
+    if (this.background) {
+      this.background.setDisplaySize(Constants.WIDTH + 50, Constants.HEIGHT + 50);
+    }
+    
+    if (this.starfield) {
+      this.starfield.setSize(Constants.WIDTH, Constants.HEIGHT);
+    }
+    
+    // Reposition UI elements
+    if (this.roomInfoBg && this.roomInfoText) {
+      this.roomInfoBg.setPosition(Constants.WIDTH - 150, 40);
+      this.roomInfoText.setPosition(Constants.WIDTH - 150, 40);
+    }
+    
+    // Ensure the coin stays inside the playable area if it's been repositioned
+    if (this.coin) {
+      this.coin.x = Phaser.Math.Clamp(this.coin.x, 20, Constants.WIDTH - 20);
+      this.coin.y = Phaser.Math.Clamp(this.coin.y, 20, Constants.HEIGHT - 20);
+    }
   }
 }
 

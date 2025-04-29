@@ -139,8 +139,8 @@ export default class RoomSelection extends Phaser.Scene {
     this.formContainer = this.add.container(0, 0);
     this.formContainer.setVisible(false);
     
-    // Form background
-    this.formPanel = this.add.rectangle(0, 0, 400, 300, 0x000000, 0.9)
+    // Form background - increase width by 30%
+    this.formPanel = this.add.rectangle(0, 0, 520, 300, 0x000000, 0.9)
       .setStrokeStyle(2, 0xFFE81F);
     this.formContainer.add(this.formPanel);
     
@@ -153,15 +153,16 @@ export default class RoomSelection extends Phaser.Scene {
     }).setOrigin(0.5);
     this.formContainer.add(this.formTitle);
     
-    // Room name input
-    this.nameLabel = this.add.text(-150, -40, 'Room Name:', {
+    // Room name input - adjust position to account for wider form
+    this.nameLabel = this.add.text(-200, -40, 'Room Name:', {
       fontFamily: 'Arial',
       fontSize: '18px',
       color: '#FFFFFF'
     }).setOrigin(0, 0.5);
     this.formContainer.add(this.nameLabel);
     
-    this.nameInputBackground = this.add.rectangle(50, -40, 200, 30, 0x333333)
+    // Make input field wider to match new form width
+    this.nameInputBackground = this.add.rectangle(50, -40, 250, 30, 0x333333)
       .setStrokeStyle(1, 0x666666);
     this.formContainer.add(this.nameInputBackground);
     
@@ -173,8 +174,8 @@ export default class RoomSelection extends Phaser.Scene {
     }).setOrigin(0.5);
     this.formContainer.add(this.nameInputText);
     
-    // Max players selector
-    this.maxPlayersLabel = this.add.text(-150, 20, 'Max Players:', {
+    // Max players selector - adjust position
+    this.maxPlayersLabel = this.add.text(-200, 20, 'Max Players:', {
       fontFamily: 'Arial',
       fontSize: '18px',
       color: '#FFFFFF'
