@@ -3,6 +3,7 @@ import PlayGame from "./scenes/PlayGame";
 import Welcome from "./scenes/Welcome";
 import Winner from "./scenes/Winner";
 import RoomSelection from "./scenes/RoomSelection";
+import LevelSelect from "./scenes/LevelSelect";
 import Constants from "./constants";
 
 // Custom starfield shader
@@ -78,6 +79,7 @@ game.scene.add("roomselection", RoomSelection);
 game.scene.add("playgame", PlayGame);
 game.scene.add("welcome", Welcome);
 game.scene.add("winner", Winner);
+game.scene.add("levelselect", LevelSelect);
 game.scene.start("welcome");
 
 // Listen for resize events to update game dimensions

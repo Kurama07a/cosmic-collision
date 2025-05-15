@@ -11,8 +11,15 @@ export default class RoomSelection extends Phaser.Scene {
     this.showCreateRoomForm = false;
   }
 
-  init(playerName) {
-    this.playerName = playerName;
+  init(data) {
+    // Accept both string (legacy) and object (new)
+    if (typeof data === "string") {
+      this.playerName = data;
+      this.selectedLevel = "classic";
+    } else {
+      this.playerName = data.playerName;
+      this.selectedLevel = data.level || "classic";
+    }
     
     // Determine endpoint
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
@@ -313,7 +320,8 @@ export default class RoomSelection extends Phaser.Scene {
         this.scene.start("playgame", { 
           playerName: this.playerName,
           roomId: response.roomId,
-          roomName: response.roomName
+          roomName: response.roomName,
+          level: this.selectedLevel
         });
       } else {
         this.showErrorMessage(response.message);

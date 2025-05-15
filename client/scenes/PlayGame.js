@@ -11,6 +11,7 @@ import Constants from "../constants";
 import io from "socket.io-client";
 import background from "../assets/background.png";
 import starsBackground from "../assets/Space.png";
+import BlackholeImg from "../assets/bh.png";
 import ClientPrediction from "./predictor";
 
 class PlayGame extends Phaser.Scene {
@@ -21,10 +22,12 @@ class PlayGame extends Phaser.Scene {
       this.name = params;
       this.roomId = "main";
       this.roomName = "Free-For-All";
+      this.level = "classic";
     } else {
       this.name = params.playerName;
       this.roomId = params.roomId;
       this.roomName = params.roomName;
+      this.level = params.level || "classic";
     }
 
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
@@ -44,6 +47,22 @@ class PlayGame extends Phaser.Scene {
     this.x = Phaser.Math.Between(50, Constants.WIDTH - 50);
     this.y = Phaser.Math.Between(50, Constants.HEIGHT - 50);
 
+    // For fly controls
+    this.thrust = 0.95;
+    this.rotationSpeed = 0;
+    this.powerupState = { speed: false, multi: false, attract: false };
+    this.powerupTimer = {};
+    this.activePowerups = [];
+    this.powerupBarGraphics = null;
+
+    // Blackhole level properties
+    this.blackholeMass = 10000;
+    this.shipMass = 10;
+    this.G = 3000; // Gravitational constant for gameplay feel
+    this.respawning = false;
+    this.respawnTarget = null;
+    this.respawnLerpT = 0;
+
     // Use existing socket if available (from room selection)
     this.socket = window.gameSocket || null;
   }
@@ -59,6 +78,7 @@ class PlayGame extends Phaser.Scene {
     this.load.image("coin", Coin);
     this.load.image("ship", Spaceship);
     this.load.image("bullet", BulletIcon);
+    this.load.image('blackhole', BlackholeImg);
     this.load.audio("explosion", ExplosionSound);
     this.load.audio("shot", ShotSound);
     this.load.audio("coin", CoinSound);
@@ -112,6 +132,11 @@ class PlayGame extends Phaser.Scene {
 
     // Create bullet sprite-group
     this.bullets = new Bullets(this);
+
+    // Blackhole level setup
+    if (this.level === "blackhole") {
+      this.initBlackholeLevel();
+    }
 
     // Join room or get initialized in current room
     if (this.roomId) {
@@ -291,36 +316,217 @@ class PlayGame extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustUp(keys.left)) newState = newState.substring(0, 2) + "0" + newState.substring(3);
     if (Phaser.Input.Keyboard.JustUp(keys.right)) newState = newState.substring(0, 3) + "0" + newState.substring(4);
 
-    // Emit shot event if space is pressed
-    if (newState[4] === "1") {
-        this.shot_sound.play();
-        this.bullets.fireBullet(
-            this.ship.cont.x,
-            this.ship.cont.y,
-            this.ship.ship.angle - 90,
-            () => {}
-        );
-        this.socket.emit("shot", { x: this.ship.cont.x, y: this.ship.cont.y });
+    if (this.level === "blackhole") {
+      this.updateBlackholeLevel(delta);
+    } else {
+      // Emit shot event if space is pressed
+      if (newState[4] === "1") {
+          this.shot_sound.play();
+          this.bullets.fireBullet(
+              this.ship.cont.x,
+              this.ship.cont.y,
+              this.ship.ship.angle - 90,
+              () => {}
+          );
+          this.socket.emit("shot", { x: this.ship.cont.x, y: this.ship.cont.y });
+      }
+
+      // Emit keystroke state if it has changed
+      if (newState !== this.keystrokeState) {
+          this.keystrokeState = newState;
+          this.socket.emit("keystroke_state", newState);
+      }
+
+      // Update local player position based on keystroke state
+      this.updatePlayerPosition(this.keystrokeState, this.ship, delta);
+
+      // Update other players' positions based on their keystroke states
+      for (const id in this.othersKeystrokes) {
+          this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
+      }
+
+      // Check for bullet collisions with other players
+      this.checkBulletCollisions();
     }
-
-    // Emit keystroke state if it has changed
-    if (newState !== this.keystrokeState) {
-        this.keystrokeState = newState;
-        this.socket.emit("keystroke_state", newState);
-    }
-
-    // Update local player position based on keystroke state
-    this.updatePlayerPosition(this.keystrokeState, this.ship, delta);
-
-    // Update other players' positions based on their keystroke states
-    for (const id in this.othersKeystrokes) {
-        this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
-    }
-
-    // Check for bullet collisions with other players
-    this.checkBulletCollisions();
 
     this.emit_coordinates();
+  }
+
+  initBlackholeLevel() {
+    // Blackhole in center
+    this.blackhole = this.add.sprite(Constants.WIDTH/2, Constants.HEIGHT/2, "blackhole").setScale(0.5).setDepth(2);
+    this.physics.add.existing(this.blackhole, false);
+    this.blackhole.body.setCircle(this.blackhole.width/2 * 0.5);
+
+    // Powerup group
+    this.powerups = this.physics.add.group();
+    this.time.addEvent({
+      delay: 8000,
+      loop: true,
+      callback: () => this.spawnPowerup()
+    });
+
+    // Attract coin effect
+    this.attractRadius = 200;
+
+    // Powerup bar graphics
+    this.powerupBarGraphics = this.add.graphics().setDepth(10);
+
+    // Blackhole physics: add velocity for the ship
+    this.shipVelocity = { x: 0, y: 0 };
+  }
+
+  updateBlackholeLevel(delta) {
+    const dt = delta / 1000;
+    const keys = this.keys;
+    let ship = this.ship;
+    // --- Increased speed ---
+    let speed = this.powerupState.speed ? 1700 : 1200; // was 1200/800
+    let rotSpeed = 270; // was 220
+
+    // --- Respawn logic ---
+    if (this.respawning) {
+      this.respawnLerpT += delta / 800;
+      ship.cont.x = Phaser.Math.Interpolation.Linear([ship.cont.x, this.respawnTarget.x], this.respawnLerpT);
+      ship.cont.y = Phaser.Math.Interpolation.Linear([ship.cont.y, this.respawnTarget.y], this.respawnLerpT);
+      if (this.respawnLerpT >= 1) {
+        this.respawning = false;
+        this.respawnLerpT = 0;
+        ship.ship.setVisible(true);
+        if (ship.cont.setVisible) ship.cont.setVisible(true);
+        // Reset velocity after respawn
+        this.shipVelocity.x = 0;
+        this.shipVelocity.y = 0;
+      }
+      this.drawPowerupBar();
+      this.emit_coordinates();
+      return;
+    }
+
+    // --- Fly controls: up = thrust, left/right = rotate ---
+    if (keys.left.isDown) {
+      ship.ship.angle -= rotSpeed * dt;
+    }
+    if (keys.right.isDown) {
+      ship.ship.angle += rotSpeed * dt;
+    }
+    // Thrust applies acceleration in facing direction
+    if (keys.up.isDown) {
+      const angleRad = Phaser.Math.DegToRad(ship.ship.angle - 90);
+      this.shipVelocity.x += Math.cos(angleRad) * (speed * 0.7) * dt / this.shipMass;
+      this.shipVelocity.y += Math.sin(angleRad) * (speed * 0.7) * dt / this.shipMass;
+    }
+
+    // --- Blackhole gravity (constant for whole screen, increases as you get closer) ---
+    if (this.blackhole) {
+      const dx = this.blackhole.x - ship.cont.x;
+      const dy = this.blackhole.y - ship.cont.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      // No influence radius: always acts
+      // F = G * m1 * m2 / r^2, acceleration = F / m1
+      const force = this.G * this.shipMass * this.blackholeMass / (dist * dist);
+      const ax = (dx / dist) * force / this.shipMass;
+      const ay = (dy / dist) * force / this.shipMass;
+      this.shipVelocity.x += ax * dt;
+      this.shipVelocity.y += ay * dt;
+      // If too close, respawn at edge and lerp
+      if (dist < 40 && !this.respawning) {
+        ship.ship.setVisible(false);
+        for (let type of Object.keys(this.powerupState)) {
+          this.powerupState[type] = false;
+          if (this.powerupTimer[type]) {
+            this.powerupTimer[type].remove();
+            this.powerupTimer[type] = null;
+          }
+        }
+        let edge = Phaser.Math.Between(0, 3);
+        let rx, ry;
+        if (edge === 0) { rx = 10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
+        else if (edge === 1) { rx = Constants.WIDTH-10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
+        else if (edge === 2) { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = 10; }
+        else { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = Constants.HEIGHT-10; }
+        this.respawning = true;
+        this.respawnTarget = { x: rx, y: ry };
+        this.respawnLerpT = 0;
+        return;
+      }
+    }
+
+    // --- Apply velocity to ship position ---
+    ship.cont.x += this.shipVelocity.x * dt;
+    ship.cont.y += this.shipVelocity.y * dt;
+
+    // --- Reduced drag for more speed ---
+    this.shipVelocity.x *= 0.997; // was 0.995
+    this.shipVelocity.y *= 0.997;
+
+    // --- Attract coin powerup ---
+    if (this.powerupState.attract && this.coin) {
+      const dx = ship.cont.x - this.coin.x;
+      const dy = ship.cont.y - this.coin.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < this.attractRadius) {
+        this.coin.x += dx/dist * 8;
+        this.coin.y += dy/dist * 8;
+      }
+    }
+
+    // --- Multi-bullet powerup and bullet firing fix ---
+    if (!this.lastSpace) this.lastSpace = false;
+    if (this.space.isDown && !this.lastSpace) {
+      this.shot_sound.play();
+      if (this.powerupState.multi) {
+        for (let spread = -15; spread <= 15; spread += 15) {
+          this.bullets.fireBullet(
+            ship.cont.x,
+            ship.cont.y,
+            ship.ship.angle - 90 + spread,
+            () => {}
+          );
+        }
+      } else {
+        this.bullets.fireBullet(
+          ship.cont.x,
+          ship.cont.y,
+          ship.ship.angle - 90,
+          () => {}
+        );
+      }
+      this.socket.emit("shot", { x: ship.cont.x, y: ship.cont.y });
+      this.lastSpace = true;
+    }
+    if (this.space.isUp) {
+      this.lastSpace = false;
+    }
+
+    // --- Powerup bar ---
+    this.drawPowerupBar();
+
+    this.emit_coordinates();
+  }
+
+  drawPowerupBar() {
+    if (!this.powerupBarGraphics) return;
+    this.powerupBarGraphics.clear();
+    const ship = this.ship;
+    const barWidth = 60;
+    const barHeight = 8;
+    let y = ship.cont.y - 40;
+    let x = ship.cont.x - barWidth/2;
+    let types = Object.keys(this.powerupState).filter(t => this.powerupState[t]);
+    if (types.length === 0) return;
+    let colorMap = { speed: 0x00ff00, multi: 0xff8800, attract: 0x00ffff };
+    let idx = 0;
+    for (let type of types) {
+      // Remaining time
+      let timer = this.powerupTimer[type];
+      let progress = timer ? (timer.getRemaining() / 8000) : 0;
+      this.powerupBarGraphics.fillStyle(colorMap[type], 1);
+      this.powerupBarGraphics.fillRect(x, y + idx*(barHeight+2), barWidth * progress, barHeight);
+      this.powerupBarGraphics.lineStyle(1, 0xffffff, 1);
+      this.powerupBarGraphics.strokeRect(x, y + idx*(barHeight+2), barWidth, barHeight);
+      idx++;
+    }
   }
 
   checkBulletCollisions() {
@@ -626,6 +832,31 @@ class PlayGame extends Phaser.Scene {
       this.coin.x = Phaser.Math.Clamp(this.coin.x, 20, Constants.WIDTH - 20);
       this.coin.y = Phaser.Math.Clamp(this.coin.y, 20, Constants.HEIGHT - 20);
     }
+  }
+
+  spawnPowerup() {
+    // Randomly pick a type
+    const types = ["speed", "multi", "attract"];
+    const type = Phaser.Utils.Array.GetRandom(types);
+    const x = Phaser.Math.Between(60, Constants.WIDTH-60);
+    const y = Phaser.Math.Between(60, Constants.HEIGHT-60);
+    const powerup = this.powerups.create(x, y, "ship").setScale(0.6).setTint(type === "speed" ? 0x00ff00 : type === "multi" ? 0xff8800 : 0x00ffff);
+    powerup.type = type;
+    powerup.setDepth(2);
+    powerup.body.setCircle(20);
+    // Overlap with player
+    this.physics.add.overlap(this.ship.ship, powerup, () => this.collectPowerup(powerup), null, this);
+  }
+
+  collectPowerup(powerup) {
+    const type = powerup.type;
+    powerup.destroy();
+    this.powerupState[type] = true;
+    if (this.powerupTimer[type]) this.powerupTimer[type].remove();
+    // Powerup lasts 8 seconds
+    this.powerupTimer[type] = this.time.delayedCall(8000, () => {
+      this.powerupState[type] = false;
+    });
   }
 }
 
