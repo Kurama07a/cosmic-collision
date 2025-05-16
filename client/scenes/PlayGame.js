@@ -13,7 +13,9 @@ import background from "../assets/background.png";
 import starsBackground from "../assets/Space.png";
 import BlackholeImg from "../assets/bh.png";
 import ClientPrediction from "./predictor";
-
+import bulletPowerup from "../assets/multi.png";
+import speedPowerup from "../assets/speed.png";
+import attractPowerup from "../assets/magnet.png";
 class PlayGame extends Phaser.Scene {
   /* Initialize client connection to socket server */
   init(params) {
@@ -56,9 +58,9 @@ class PlayGame extends Phaser.Scene {
     this.powerupBarGraphics = null;
 
     // Blackhole level properties
-    this.blackholeMass = 10000;
-    this.shipMass = 10;
-    this.G = 3000; // Gravitational constant for gameplay feel
+    this.blackholeMass = 24000;
+    this.shipMass = 1;
+    this.G = 6500; // Gravitational constant for gameplay feel
     this.respawning = false;
     this.respawnTarget = null;
     this.respawnLerpT = 0;
@@ -68,8 +70,8 @@ class PlayGame extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image('background', background); // Ensure this path is correct
-    this.load.image('space', starsBackground); // Add the same background as Welcome
+    this.load.image('background', background);
+    this.load.image('space', starsBackground);
     this.load.spritesheet("boom", Explosion, {
       frameWidth: 64,
       frameHeight: 64,
@@ -79,6 +81,10 @@ class PlayGame extends Phaser.Scene {
     this.load.image("ship", Spaceship);
     this.load.image("bullet", BulletIcon);
     this.load.image('blackhole', BlackholeImg);
+    // Load powerup assets
+    this.load.image('multi', bulletPowerup);
+    this.load.image('speed', speedPowerup);
+    this.load.image('attract', attractPowerup);
     this.load.audio("explosion", ExplosionSound);
     this.load.audio("shot", ShotSound);
     this.load.audio("coin", CoinSound);
@@ -381,8 +387,8 @@ class PlayGame extends Phaser.Scene {
     const keys = this.keys;
     let ship = this.ship;
     // --- Increased speed ---
-    let speed = this.powerupState.speed ? 1700 : 1200; // was 1200/800
-    let rotSpeed = 270; // was 220
+    let speed = this.powerupState.speed ? 4800 : 3500; // was 1200/800
+    let rotSpeed = 120; // was 220
 
     // --- Respawn logic ---
     if (this.respawning) {
@@ -457,8 +463,8 @@ class PlayGame extends Phaser.Scene {
     ship.cont.y += this.shipVelocity.y * dt;
 
     // --- Reduced drag for more speed ---
-    this.shipVelocity.x *= 0.997; // was 0.995
-    this.shipVelocity.y *= 0.997;
+    this.shipVelocity.x *= 0.955; // was 0.995
+    this.shipVelocity.y *= 0.955;
 
     // --- Attract coin powerup ---
     if (this.powerupState.attract && this.coin) {
@@ -840,9 +846,31 @@ class PlayGame extends Phaser.Scene {
     const type = Phaser.Utils.Array.GetRandom(types);
     const x = Phaser.Math.Between(60, Constants.WIDTH-60);
     const y = Phaser.Math.Between(60, Constants.HEIGHT-60);
-    const powerup = this.powerups.create(x, y, "ship").setScale(0.6).setTint(type === "speed" ? 0x00ff00 : type === "multi" ? 0xff8800 : 0x00ffff);
+    
+    // Use the dedicated powerup assets instead of tinted ships
+    const powerup = this.powerups.create(x, y, type).setScale(0.5);
     powerup.type = type;
     powerup.setDepth(2);
+    
+    // Add rotation animation for powerups
+    this.tweens.add({
+      targets: powerup,
+      angle: 360,
+      duration: 3000,
+      repeat: -1,
+      ease: 'Linear'
+    });
+    
+    // Add pulsing effect
+    this.tweens.add({
+      targets: powerup,
+      scale: 0.6,
+      duration: 1000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+    
     powerup.body.setCircle(20);
     // Overlap with player
     this.physics.add.overlap(this.ship.ship, powerup, () => this.collectPowerup(powerup), null, this);
@@ -850,7 +878,16 @@ class PlayGame extends Phaser.Scene {
 
   collectPowerup(powerup) {
     const type = powerup.type;
-    powerup.destroy();
+    
+    // Add collection effect
+    this.tweens.add({
+      targets: powerup,
+      scale: 0,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => powerup.destroy()
+    });
+    
     this.powerupState[type] = true;
     if (this.powerupTimer[type]) this.powerupTimer[type].remove();
     // Powerup lasts 8 seconds
