@@ -47,6 +47,8 @@ class PlayGame extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.SPACE
     );
     this.score = 0;
+    this.coinScore = 0; // Track coins separately
+    this.asteroidsDestroyed = 0; // Track asteroids separately
     this.others = {}; // to store other players
     this.keystrokeState = "000000"; // Binary string for up, down, left, right, fire, collision
     this.othersKeystrokes = {}; // Map of other players' keystroke states
@@ -121,12 +123,17 @@ class PlayGame extends Phaser.Scene {
     this.load.audio("shot", ShotSound);
     this.load.audio("coin", CoinSound);
     
-    // Load mode-specific assets
-    if (this.level === "asteroid") {
-      this.load.image('asteroid-large', starsBackground); // Placeholder
-      this.load.image('asteroid-medium', starsBackground); // Placeholder
-      this.load.image('asteroid-small', starsBackground); // Placeholder
-    }
+    // Load asteroid assets
+    this.load.image('asteroid-large', starsBackground); // Placeholder
+    this.load.image('asteroid-medium', starsBackground); // Placeholder
+    this.load.image('asteroid-small', starsBackground); // Placeholder
+    
+    // Create asteroid textures dynamically
+    this.load.on('complete', () => {
+      if (this.level === "asteroid") {
+        this.createAsteroidTextures();
+      }
+    });
   }
 
   create() {
@@ -387,18 +394,230 @@ class PlayGame extends Phaser.Scene {
       }
 
       // Update local player position based on keystroke state
-      this.updatePlayerPosition(this.keystrokeState, this.ship, delta);
+      this.movePlayerBasedOnKeystroke(this.keystrokeState, this.ship, delta);
 
       // Update other players' positions based on their keystroke states
       for (const id in this.othersKeystrokes) {
-          this.updatePlayerPosition(this.othersKeystrokes[id], this.others[id].ship, delta);
+          if (this.others[id] && this.others[id].ship) {
+              this.movePlayerBasedOnKeystroke(this.othersKeystrokes[id], this.others[id].ship, delta);
+          }
       }
 
       // Check for bullet collisions with other players
       this.checkBulletCollisions();
+      
+      // Update asteroid positions if in asteroid mode
+      if (this.level === "asteroid") {
+        this.updateAsteroids(delta);
+      }
     }
 
     this.emit_coordinates();
+  }
+
+  // Add the missing checkBulletCollisions function
+  checkBulletCollisions() {
+    if (!this.bullets || !this.bullets.children) return;
+    
+    this.bullets.children.each((bullet) => {
+      if (bullet.active) {
+        for (const id in this.others) {
+          if (!this.others[id] || !this.others[id].ship || !this.others[id].ship.cont) continue;
+          
+          const other = this.others[id].ship.cont;
+          const distance = Phaser.Math.Distance.Between(
+            bullet.x, bullet.y,
+            other.x, other.y
+          );
+          
+          // Simple distance-based collision detection
+          if (distance < 30) { // adjust collision radius as needed
+            // Set bullet to inactive
+            bullet.setActive(false);
+            bullet.setVisible(false);
+            
+            // Emit collision event
+            this.socket.emit("collision", { 
+              bullet_user_id: this.id, 
+              bullet_index: this.bullets.children.entries.indexOf(bullet),
+              target_id: id 
+            });
+            
+            // Animate explosion
+            this.animate_explosion(id);
+            
+            // Reduce other player's score
+            if (this.others[id]) {
+              const otherScore = Math.max(0, this.others[id].score - 2);
+              this.others[id].score = otherScore;
+              this.others[id].ship.score_text.setText(`${this.others[id].name}: ${otherScore}`);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Add the movement function that was missing
+  movePlayerBasedOnKeystroke(state, ship, delta) {
+    const speed = 800; // Base speed in pixels per second
+    let dx = 0;
+    let dy = 0;
+
+    // Determine movement direction
+    if (state[0] === "1") dy -= 1; // Up
+    if (state[1] === "1") dy += 1; // Down
+    if (state[2] === "1") dx -= 1; // Left
+    if (state[3] === "1") dx += 1; // Right
+
+    // Normalize diagonal movement
+    const magnitude = Math.sqrt(dx * dx + dy * dy);
+    if (magnitude > 0) {
+        dx /= magnitude;
+        dy /= magnitude;
+    }
+
+    // Set angle based on movement direction
+    if (dx !== 0 || dy !== 0) {
+        const angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+        ship.ship.setAngle(angle + 90); // Adjust angle to match sprite orientation
+    }
+
+    // Apply movement with time delta factor
+    if (ship.cont) {
+        ship.cont.x += dx * speed * (delta / 1000);
+        ship.cont.y += dy * speed * (delta / 1000);
+    }
+  }
+
+  updateAsteroids(delta) {
+    if (!this.asteroidGroup) return;
+    
+    // Update position of each asteroid based on orbital parameters
+    this.asteroidMap.forEach((asteroid, id) => {
+      if (asteroid.active && !asteroid.destroyed) {
+        // Calculate new position based on orbital parameters
+        const orbitParams = asteroid.getData('orbitParams');
+        const createdAt = asteroid.getData('createdAt');
+        const elapsedTime = (Date.now() - createdAt) / 1000; // Time in seconds
+        
+        if (orbitParams) {
+          // Calculate new position based on orbital parameters
+          const newPos = this.calculateOrbitPosition(orbitParams, elapsedTime);
+          asteroid.x = newPos.x;
+          asteroid.y = newPos.y;
+          
+          // Check if asteroid is off-screen and should be removed
+          if (asteroid.x < -100 || asteroid.x > Constants.WIDTH + 100 || 
+              asteroid.y < -100 || asteroid.y > Constants.HEIGHT + 100) {
+            if (!asteroid.offScreenTime) {
+              asteroid.offScreenTime = Date.now();
+            } else if (Date.now() - asteroid.offScreenTime > 3000) {
+              // Remove asteroid after being off-screen for 3 seconds
+              asteroid.destroy();
+              this.asteroidMap.delete(id);
+            }
+          } else {
+            asteroid.offScreenTime = null;
+          }
+        }
+      }
+    });
+  }
+  
+  // Generate orbital parameters for an asteroid
+  generateOrbitParams(x, y, vx, vy) {
+    // Create parameters for an elliptical or hyperbolic orbit
+    const params = {
+      // Starting position
+      startX: x,
+      startY: y,
+      // Velocity components
+      vx: vx,
+      vy: vy,
+      // Add some curvature to the path
+      curvature: Phaser.Math.FloatBetween(0.1, 0.5) * (Math.random() > 0.5 ? 1 : -1),
+      // Random variations
+      wobble: {
+        amplitude: Phaser.Math.FloatBetween(0, 15),
+        frequency: Phaser.Math.FloatBetween(0.1, 0.5)
+      }
+    };
+    
+    return params;
+  }
+  
+  // Calculate position on orbital path at given time
+  calculateOrbitPosition(params, time) {
+    const { startX, startY, vx, vy, curvature, wobble } = params;
+    
+    // Base position is linear motion
+    let x = startX + vx * time;
+    let y = startY + vy * time;
+    
+    // Add curved path component
+    x += curvature * vy * time * time * 0.5;
+    y -= curvature * vx * time * time * 0.5;
+    
+    // Add wobble if specified
+    if (wobble) {
+      x += Math.sin(time * wobble.frequency * Math.PI * 2) * wobble.amplitude;
+      y += Math.cos(time * wobble.frequency * Math.PI * 2) * wobble.amplitude;
+    }
+    
+    return { x, y };
+  }
+  
+  checkWinCondition() {
+    // Check if player has enough coins (100+) and maximum asteroid hits
+    if (this.coinScore >= 100) {
+      let hasMoreAsteroids = false;
+      
+      // Check if anyone else has destroyed more asteroids
+      for (let id in this.others) {
+        if (this.others[id].asteroidsDestroyed > this.asteroidsDestroyed) {
+          hasMoreAsteroids = true;
+          break;
+        }
+      }
+      
+      // Win if no one has more asteroids destroyed and we have 100+ coins
+      if (!hasMoreAsteroids) {
+        this.declareWinner();
+      }
+    }
+  }
+
+  declareWinner() {
+    let players = [{ 
+      name: this.name, 
+      score: this.coinScore, // Use coin score for overall score
+      asteroidsDestroyed: this.asteroidsDestroyed 
+    }];
+    
+    for (let id in this.others) {
+      players.push({
+        name: this.others[id].name,
+        score: this.others[id].coinScore || this.others[id].score, // Use coin score if available
+        asteroidsDestroyed: this.others[id].asteroidsDestroyed || 0
+      });
+    }
+    
+    // Sort by asteroid count first, then by coin score
+    players.sort((a, b) => {
+      const asteroidDiff = b.asteroidsDestroyed - a.asteroidsDestroyed;
+      if (asteroidDiff !== 0) return asteroidDiff;
+      return b.score - a.score; 
+    });
+    
+    // Disconnect and show winners
+    setTimeout(() => this.socket.disconnect(), 20);
+    this.scene.start("winner", {
+      players,
+      roomName: this.roomName,
+      level: "asteroid",
+      asteroidMode: true
+    });
   }
 
   initBlackholeLevel() {
@@ -552,6 +771,19 @@ class PlayGame extends Phaser.Scene {
     this.drawPowerupBar();
 
     this.emit_coordinates();
+  }
+
+  // Helper method to create explosion
+  createExplosion(x, y) {
+    const boom = this.add.sprite(x, y, "boom");
+    boom.setDepth(3);
+    boom.anims.play("explode");
+    this.explosion_sound.play();
+    
+    // Remove explosion sprite once animation completes
+    boom.on('animationcomplete', () => {
+      boom.destroy();
+    });
   }
 
   initTeamDeathmatch() {
@@ -611,10 +843,20 @@ class PlayGame extends Phaser.Scene {
     // Create asteroid group
     this.asteroidGroup = this.physics.add.group();
     
-    // Start spawning asteroids
+    // Asteroid tracking
+    this.asteroidMap = new Map(); // Maps asteroidId to asteroid object
+    this.asteroidsDestroyed = 0;
+    this.receivedServerAsteroids = false;
+    
+    // Start spawning asteroids - server will control actual spawning
     this.asteroidTimer = this.time.addEvent({
       delay: 2000,
-      callback: this.spawnAsteroid,
+      callback: () => {
+        if (this.socket && this.id === this.getLowestPlayerId()) {
+          // Only one client should initiate asteroid creation
+          this.requestNewAsteroid();
+        }
+      },
       callbackScope: this,
       loop: true
     });
@@ -626,7 +868,7 @@ class PlayGame extends Phaser.Scene {
       .setStrokeStyle(2, 0xFFFFFF, 0.5);
     scoreContainer.add(scoreBg);
     
-    this.asteroidScoreText = this.add.text(0, 0, `ASTEROID: 0`, {
+    this.asteroidScoreText = this.add.text(0, 0, `ASTEROIDS: 0`, {
       fontFamily: 'Arial',
       fontSize: '16px',
       color: '#FFFFFF',
@@ -634,94 +876,223 @@ class PlayGame extends Phaser.Scene {
     }).setOrigin(0.5);
     scoreContainer.add(this.asteroidScoreText);
     
+    // Add coin score display
+    const coinScoreContainer = this.add.container(Constants.WIDTH - 150, 130);
+    
+    const coinScoreBg = this.add.rectangle(0, 0, 150, 40, 0x000000, 0.7)
+      .setStrokeStyle(2, 0xFFDD00, 0.5);
+    coinScoreContainer.add(coinScoreBg);
+    
+    this.coinScoreText = this.add.text(0, 0, `COINS: 0`, {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFDD00',
+      align: 'center'
+    }).setOrigin(0.5);
+    coinScoreContainer.add(this.coinScoreText);
+    
+    // IMPORTANT: Set up collision between player CONTAINER and asteroids,
+    // not the ship sprite itself which is just a child of the container
+    this.physics.add.collider(this.ship.cont, this.asteroidGroup, this.playerHitAsteroid, null, this);
+    
     // Set up collision between bullets and asteroids
     this.physics.add.collider(this.bullets, this.asteroidGroup, this.hitAsteroid, null, this);
     
     // Set up collision between player ship and asteroids
     this.physics.add.collider(this.ship.ship, this.asteroidGroup, this.playerHitAsteroid, null, this);
+    
+    // Listen for asteroid spawn events
+    this.socket.on("new_asteroid", (asteroidData) => {
+      this.spawnAsteroid(asteroidData);
+    });
+    
+    // Listen for asteroid hit events
+    this.socket.on("asteroid_hit", (data) => {
+      const { asteroidId, playerId, playerScore, playerAsteroidCount } = data;
+      
+      // Update the asteroid
+      const asteroid = this.asteroidMap.get(asteroidId);
+      if (asteroid) {
+        this.createExplosion(asteroid.x, asteroid.y);
+        asteroid.destroy();
+        this.asteroidMap.delete(asteroidId);
+        
+        // If another player hit it, update their score
+        if (playerId !== this.id && this.others[playerId]) {
+          this.others[playerId].score = playerScore;
+          this.others[playerId].asteroidsDestroyed = playerAsteroidCount;
+          this.others[playerId].ship.score_text.setText(
+            `${this.others[playerId].name}: ${playerScore}`
+          );
+        }
+      }
+    });
+    
+    // Initial batch of asteroids from server
+    this.socket.on("initial_asteroids", (asteroids) => {
+      this.receivedServerAsteroids = true;
+      asteroids.forEach(asteroidData => {
+        this.spawnAsteroid(asteroidData);
+      });
+    });
+    
+    // Request initial asteroids from server
+    this.socket.emit("get_asteroids");
   }
   
-  // Method to spawn asteroids
-  spawnAsteroid() {
+  createAsteroidTextures() {
+    const sizes = ['large', 'medium', 'small'];
+    const colors = [0xcccccc, 0xaaaaaa, 0x888888];
+    
+    sizes.forEach((size, i) => {
+      // Create a graphics object to draw the asteroid
+      const graphics = this.make.graphics({x: 0, y: 0, add: false});
+      
+      // Set fill style with a slight variation
+      graphics.fillStyle(colors[i], 1);
+      
+      // Draw a rock-like shape with irregular edges
+      const radius = size === 'large' ? 40 : (size === 'medium' ? 25 : 15);
+      const points = [];
+      const segments = 12;
+      
+      for (let i = 0; i < segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const variance = Phaser.Math.Between(85, 115) / 100;
+        const x = Math.cos(angle) * radius * variance;
+        const y = Math.sin(angle) * radius * variance;
+        points.push({ x, y });
+      }
+      
+      // Connect points to form asteroid shape
+      graphics.beginPath();
+      graphics.moveTo(points[0].x, points[0].y);
+      
+      for (let i = 1; i < points.length; i++) {
+        graphics.lineTo(points[i].x, points[i].y);
+      }
+      
+      graphics.closePath();
+      graphics.fillPath();
+      
+      // Add some crater details
+      graphics.fillStyle(0x666666, 0.6);
+      
+      const craterCount = size === 'large' ? 4 : (size === 'medium' ? 3 : 2);
+      for (let i = 0; i < craterCount; i++) {
+        const craterSize = radius * (Phaser.Math.Between(15, 25) / 100);
+        const craterX = Phaser.Math.Between(-radius * 0.5, radius * 0.5);
+        const craterY = Phaser.Math.Between(-radius * 0.5, radius * 0.5);
+        graphics.fillCircle(craterX, craterY, craterSize);
+      }
+      
+      // Add a stroke around the edge
+      graphics.lineStyle(2, 0x555555, 1);
+      graphics.strokePath();
+      
+      // Generate the texture
+      graphics.generateTexture(`asteroid-${size}-actual`, radius * 2.5, radius * 2.5);
+    });
+  }
+  
+  getLowestPlayerId() {
+    // Get the lowest player ID in the room (for determining who spawns asteroids)
+    const playerIds = Object.keys(this.others);
+    playerIds.push(this.id);
+    return playerIds.sort()[0];
+  }
+  
+  requestNewAsteroid() {
+    // Ask server to create a new asteroid with orbital parameters
+    this.socket.emit("spawn_asteroid");
+  }
+  
+  spawnAsteroid(asteroidData) {
     if (!this.asteroidGroup) return;
     
-    // Randomly choose a size
-    const sizes = ['large', 'medium', 'small'];
-    const size = Phaser.Utils.Array.GetRandom(sizes);
-    
-    // Set position at a random edge of the screen
-    let x, y, vx, vy;
-    const side = Phaser.Math.Between(0, 3);
-    
-    switch (side) {
-      case 0: // Top
-        x = Phaser.Math.Between(0, Constants.WIDTH);
-        y = -50;
-        vx = Phaser.Math.Between(-100, 100);
-        vy = Phaser.Math.Between(50, 150);
-        break;
-      case 1: // Right
-        x = Constants.WIDTH + 50;
-        y = Phaser.Math.Between(0, Constants.HEIGHT);
-        vx = Phaser.Math.Between(-150, -50);
-        vy = Phaser.Math.Between(-100, 100);
-        break;
-      case 2: // Bottom
-        x = Phaser.Math.Between(0, Constants.WIDTH);
-        y = Constants.HEIGHT + 50;
-        vx = Phaser.Math.Between(-100, 100);
-        vy = Phaser.Math.Between(-150, -50);
-        break;
-      case 3: // Left
-        x = -50;
-        y = Phaser.Math.Between(0, Constants.HEIGHT);
-        vx = Phaser.Math.Between(50, 150);
-        vy = Phaser.Math.Between(-100, 100);
-        break;
-    }
+    const { id, size, x, y, vx, vy, orbitParams, createdAt } = asteroidData;
     
     // Create the asteroid
-    const asteroid = this.asteroidGroup.create(x, y, `asteroid-${size}`);
-    asteroid.setVelocity(vx, vy);
-    asteroid.setAngularVelocity(Phaser.Math.Between(-50, 50));
+    const asteroid = this.asteroidGroup.create(x, y, `asteroid-${size}-actual`);
+    
+    asteroid.id = id;
     asteroid.size = size;
     asteroid.health = size === 'large' ? 3 : (size === 'medium' ? 2 : 1);
+    asteroid.setData('orbitParams', orbitParams);
+    asteroid.setData('createdAt', createdAt);
+    asteroid.setData('startPosition', { x, y });
     
-    // Scale based on size
-    const scale = size === 'large' ? 1 : (size === 'medium' ? 0.65 : 0.4);
-    asteroid.setScale(scale);
+    // Set velocity (initial direction)
+    asteroid.setVelocity(vx, vy);
+    
+    // Set angular velocity for rotation
+    asteroid.setAngularVelocity(Phaser.Math.Between(-50, 50));
     
     // Set circular body for better collision detection
-    asteroid.body.setCircle(asteroid.width / 2);
+    asteroid.body.setCircle(asteroid.width / 3);
+    
+    // Store reference to the asteroid
+    this.asteroidMap.set(id, asteroid);
     
     // Remove asteroid if it goes off screen for too long
-    this.time.delayedCall(10000, () => {
-      if (asteroid.active) asteroid.destroy();
+    this.time.delayedCall(15000, () => {
+      if (asteroid.active && !asteroid.destroyed) {
+        asteroid.destroy();
+        this.asteroidMap.delete(id);
+      }
     });
+    
+    return asteroid;
   }
   
   // Method to handle bullet hitting asteroid
   hitAsteroid(bullet, asteroid) {
+    if (asteroid.destroyed) return;
+    
+    // Deactivate the bullet
     bullet.setActive(false).setVisible(false);
     
     asteroid.health--;
     
     if (asteroid.health <= 0) {
+      // Mark as destroyed to prevent double processing
+      asteroid.destroyed = true;
+      
       // Explosion effect
       this.createExplosion(asteroid.x, asteroid.y);
       
+      // Award points based on size (but keep separate from coin score)
+      const points = asteroid.size === 'large' ? 5 : (asteroid.size === 'medium' ? 3 : 1);
+      this.asteroidsDestroyed += points;
+      
+      // Update UI for asteroid score
+      this.asteroidScoreText.setText(`ASTEROIDS: ${this.asteroidsDestroyed}`);
+      
+      // Keep overall score as coin score only
+      this.score = this.coinScore;
+      this.ship.score_text.setText(`${this.name}: ${this.score}`);
+      
+      // Remove from tracking map
+      this.asteroidMap.delete(asteroid.id);
+      
+      // Notify server about the hit
+      this.socket.emit("asteroid_destroyed", {
+        asteroidId: asteroid.id,
+        newScore: this.score,
+        asteroidsDestroyed: this.asteroidsDestroyed,
+        coinScore: this.coinScore
+      });
+      
       // Split into smaller asteroids if large or medium
-      if (asteroid.size !== 'small') {
+      if (asteroid.size !== 'small' && this.id === this.getLowestPlayerId()) {
         this.splitAsteroid(asteroid);
       }
       
-      // Award points
-      const points = asteroid.size === 'large' ? 3 : (asteroid.size === 'medium' ? 2 : 1);
-      this.asteroidScore += points;
-      this.asteroidScoreText.setText(`ASTEROID: ${this.asteroidScore}`);
-      
       // Destroy the asteroid
       asteroid.destroy();
+      
+      // Check for win condition
+      this.checkWinCondition();
     }
   }
   
@@ -734,319 +1105,122 @@ class PlayGame extends Phaser.Scene {
       const angle = Phaser.Math.DegToRad(i * (360/count));
       const speed = 100;
       
-      const newAsteroid = this.asteroidGroup.create(asteroid.x, asteroid.y, `asteroid-${newSize}`);
-      newAsteroid.size = newSize;
-      newAsteroid.health = newSize === 'medium' ? 2 : 1;
-      
-      // Set velocity in different directions
-      newAsteroid.setVelocity(
+      // Create orbital parameters for the split asteroids
+      const orbitParams = this.generateOrbitParams(
+        asteroid.x, 
+        asteroid.y,
         Math.cos(angle) * speed + asteroid.body.velocity.x * 0.5,
         Math.sin(angle) * speed + asteroid.body.velocity.y * 0.5
       );
       
-      newAsteroid.setAngularVelocity(asteroid.body.angularVelocity + Phaser.Math.Between(-20, 20));
-      
-      // Scale based on size
-      const scale = newSize === 'medium' ? 0.65 : 0.4;
-      newAsteroid.setScale(scale);
-      
-      // Set circular body
-      newAsteroid.body.setCircle(newAsteroid.width / 2);
-      
-      // Remove if off screen too long
-      this.time.delayedCall(10000, () => {
-        if (newAsteroid.active) newAsteroid.destroy();
+      // Request new asteroids from the server
+      this.socket.emit("spawn_asteroid_split", {
+        size: newSize,
+        x: asteroid.x,
+        y: asteroid.y,
+        vx: Math.cos(angle) * speed + asteroid.body.velocity.x * 0.5,
+        vy: Math.sin(angle) * speed + asteroid.body.velocity.y * 0.5,
+        orbitParams
       });
     }
   }
   
   // Method to handle player ship colliding with asteroid
   playerHitAsteroid(ship, asteroid) {
-    // Create explosion
-    this.createExplosion(ship.x, ship.y);
+    if (asteroid.destroyed) return;
     
-    // Reduce player score
-    this.score = Math.max(0, this.score - 5);
+    // Create explosion effect at the asteroid position
+    this.createExplosion(asteroid.x, asteroid.y);
+    
+    // Crucial fix: Use container for effects and never apply physics to individual sprite parts
+    const container = this.ship.cont;
+    
+    // Create smoke effect at the container position
+    this.createSmokeEffect(container);
+    
+    // Reduce player coin score instead of overall score
+    this.coinScore = Math.max(0, this.coinScore - 2);
+    
+    // Update display
+    if (this.coinScoreText) {
+      this.coinScoreText.setText(`COINS: ${this.coinScore}`);
+    }
+    
+    // Update total score and score text
+    this.score = this.coinScore;
     this.ship.score_text.setText(`${this.name}: ${this.score}`);
     
-    // Temporarily disable ship
-    ship.setActive(false);
-    this.time.delayedCall(1000, () => {
-      ship.setActive(true);
+    // Mark asteroid as destroyed to prevent multiple hits
+    asteroid.destroyed = true;
+    
+    // Notify server about the collision
+    this.socket.emit("player_asteroid_collision", {
+      asteroidId: asteroid.id,
+      newScore: this.score,
+      newCoinScore: this.coinScore
+    });
+    
+    // Apply only visual effects to the ship (no physics or movement changes)
+    // Red flash effect for damage visualization
+    let flashCount = 0;
+    const flashTimer = this.time.addEvent({
+      delay: 100,
+      repeat: 4,
+      callback: () => {
+        flashCount++;
+        ship.setVisible(flashCount % 2 === 0);
+        if (flashCount >= 4) {
+          ship.clearTint();
+          ship.setVisible(true);
+        } else if (flashCount === 0) {
+          ship.setTint(0xff0000);
+        }
+      }
     });
     
     // Destroy asteroid on impact
+    this.asteroidMap.delete(asteroid.id);
     asteroid.destroy();
   }
   
-  // Helper method to create explosion
-  createExplosion(x, y) {
-    const boom = this.add.sprite(x, y, "boom");
-    boom.setDepth(3);
-    boom.anims.play("explode");
-    this.explosion_sound.play();
+  // Completely rewritten smoke effect to avoid any physics side-effects
+  createSmokeEffect(target) {
+    // Skip if target is not valid
+    if (!target || !target.active) return;
     
-    // Remove explosion sprite once animation completes
-    boom.on('animationcomplete', () => {
-      boom.destroy();
+    // Generate particle texture if it doesn't exist
+    if (!this.textures.exists('particleTexture')) {
+      const graphics = this.add.graphics();
+      graphics.fillStyle(0xFFFFFF);
+      graphics.fillCircle(8, 8, 8);
+      graphics.generateTexture('particleTexture', 16, 16);
+      graphics.destroy();
+    }
+    
+    // Create a separate particle manager that's not tied to physics
+    const particles = this.add.particles(target.x, target.y, 'particleTexture', {
+      lifespan: 600, // shorter lifespan
+      scale: { start: 0.5, end: 0 },
+      alpha: { start: 0.5, end: 0 },
+      speed: { min: 10, max: 30 },
+      angle: { min: 0, max: 360 },
+      quantity: 1,
+      frequency: 50,
+      emitting: true,
+      tint: [0x999999, 0xCCCCCC]
     });
-  }
-  
-  // Method to handle team win condition
-  handleTeamWin(winningTeam) {
-    // Collect player data for winner screen
-    let players = [{ name: this.name, score: this.score, team: this.team }];
     
-    for (let id in this.others) {
-      players.push({
-        name: this.others[id].name,
-        score: this.others[id].score,
-        team: this.others[id].team || null
-      });
-    }
-    
-    // Sort players by score
-    players.sort((a, b) => b.score - a.score);
-    
-    // Add team information
-    const gameData = {
-      players,
-      roomName: this.roomName,
-      winningTeam: winningTeam,
-      teamScores: this.teamScore
-    };
-    
-    // Disconnect from socket server
-    setTimeout(() => this.socket.disconnect(), 20);
-    
-    // Start winner scene
-    this.scene.start("winner", gameData);
-  }
-
-  /*
-  Blackhole level setup
-  */
-  initBlackholeLevel() {
-    // Blackhole in center
-    this.blackhole = this.add.sprite(Constants.WIDTH/2, Constants.HEIGHT/2, "blackhole").setScale(0.5).setDepth(2);
-    this.physics.add.existing(this.blackhole, false);
-    this.blackhole.body.setCircle(this.blackhole.width/2 * 0.5);
-
-    // Powerup group
-    this.powerups = this.physics.add.group();
-    this.time.addEvent({
-      delay: 8000,
-      loop: true,
-      callback: () => this.spawnPowerup()
-    });
-
-    // Attract coin effect
-    this.attractRadius = 200;
-
-    // Powerup bar graphics
-    this.powerupBarGraphics = this.add.graphics().setDepth(10);
-
-    // Blackhole physics: add velocity for the ship
-    this.shipVelocity = { x: 0, y: 0 };
-  }
-
-  updateBlackholeLevel(delta) {
-    const dt = delta / 1000;
-    const keys = this.keys;
-    let ship = this.ship;
-    // --- Increased speed ---
-    let speed = this.powerupState.speed ? 4800 : 3500; // was 1200/800
-    let rotSpeed = 120; // was 220
-
-    // --- Respawn logic ---
-    if (this.respawning) {
-      this.respawnLerpT += delta / 800;
-      ship.cont.x = Phaser.Math.Interpolation.Linear([ship.cont.x, this.respawnTarget.x], this.respawnLerpT);
-      ship.cont.y = Phaser.Math.Interpolation.Linear([ship.cont.y, this.respawnTarget.y], this.respawnLerpT);
-      if (this.respawnLerpT >= 1) {
-        this.respawning = false;
-        this.respawnLerpT = 0;
-        ship.ship.setVisible(true);
-        if (ship.cont.setVisible) ship.cont.setVisible(true);
-        // Reset velocity after respawn
-        this.shipVelocity.x = 0;
-        this.shipVelocity.y = 0;
-      }
-      this.drawPowerupBar();
-      this.emit_coordinates();
-      return;
-    }
-
-    // --- Fly controls: up = thrust, left/right = rotate ---
-    if (keys.left.isDown) {
-      ship.ship.angle -= rotSpeed * dt;
-    }
-    if (keys.right.isDown) {
-      ship.ship.angle += rotSpeed * dt;
-    }
-    // Thrust applies acceleration in facing direction
-    if (keys.up.isDown) {
-      const angleRad = Phaser.Math.DegToRad(ship.ship.angle - 90);
-      this.shipVelocity.x += Math.cos(angleRad) * (speed * 0.7) * dt / this.shipMass;
-      this.shipVelocity.y += Math.sin(angleRad) * (speed * 0.7) * dt / this.shipMass;
-    }
-
-    // --- Blackhole gravity (constant for whole screen, increases as you get closer) ---
-    if (this.blackhole) {
-      const dx = this.blackhole.x - ship.cont.x;
-      const dy = this.blackhole.y - ship.cont.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      // No influence radius: always acts
-      // F = G * m1 * m2 / r^2, acceleration = F / m1
-      const force = this.G * this.shipMass * this.blackholeMass / (dist * dist);
-      const ax = (dx / dist) * force / this.shipMass;
-      const ay = (dy / dist) * force / this.shipMass;
-      this.shipVelocity.x += ax * dt;
-      this.shipVelocity.y += ay * dt;
-      // If too close, respawn at edge and lerp
-      if (dist < 40 && !this.respawning) {
-        ship.ship.setVisible(false);
-        for (let type of Object.keys(this.powerupState)) {
-          this.powerupState[type] = false;
-          if (this.powerupTimer[type]) {
-            this.powerupTimer[type].remove();
-            this.powerupTimer[type] = null;
+    // Stop emitting and destroy after a short time
+    this.time.delayedCall(400, () => {
+      if (particles && particles.active) {
+        particles.emitting = false;
+        this.time.delayedCall(600, () => {
+          if (particles && particles.active) {
+            particles.destroy();
           }
-        }
-        let edge = Phaser.Math.Between(0, 3);
-        let rx, ry;
-        if (edge === 0) { rx = 10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
-        else if (edge === 1) { rx = Constants.WIDTH-10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
-        else if (edge === 2) { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = 10; }
-        else { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = Constants.HEIGHT-10; }
-        this.respawning = true;
-        this.respawnTarget = { x: rx, y: ry };
-        this.respawnLerpT = 0;
-        return;
+        });
       }
-    }
-
-    // --- Apply velocity to ship position ---
-    ship.cont.x += this.shipVelocity.x * dt;
-    ship.cont.y += this.shipVelocity.y * dt;
-
-    // --- Reduced drag for more speed ---
-    this.shipVelocity.x *= 0.955; // was 0.995
-    this.shipVelocity.y *= 0.955;
-
-    // --- Attract coin powerup ---
-    if (this.powerupState.attract && this.coin) {
-      const dx = ship.cont.x - this.coin.x;
-      const dy = ship.cont.y - this.coin.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < this.attractRadius) {
-        this.coin.x += dx/dist * 8;
-        this.coin.y += dy/dist * 8;
-      }
-    }
-
-    // --- Multi-bullet powerup and bullet firing fix ---
-    if (!this.lastSpace) this.lastSpace = false;
-    if (this.space.isDown && !this.lastSpace) {
-      this.shot_sound.play();
-      if (this.powerupState.multi) {
-        for (let spread = -15; spread <= 15; spread += 15) {
-          this.bullets.fireBullet(
-            ship.cont.x,
-            ship.cont.y,
-            ship.ship.angle - 90 + spread,
-            () => {}
-          );
-        }
-      } else {
-        this.bullets.fireBullet(
-          ship.cont.x,
-          ship.cont.y,
-          ship.ship.angle - 90,
-          () => {}
-        );
-      }
-      this.socket.emit("shot", { x: ship.cont.x, y: ship.cont.y });
-      this.lastSpace = true;
-    }
-    if (this.space.isUp) {
-      this.lastSpace = false;
-    }
-
-    // --- Powerup bar ---
-    this.drawPowerupBar();
-
-    this.emit_coordinates();
-  }
-
-  drawPowerupBar() {
-    if (!this.powerupBarGraphics) return;
-    this.powerupBarGraphics.clear();
-    const ship = this.ship;
-    const barWidth = 60;
-    const barHeight = 8;
-    let y = ship.cont.y - 40;
-    let x = ship.cont.x - barWidth/2;
-    let types = Object.keys(this.powerupState).filter(t => this.powerupState[t]);
-    if (types.length === 0) return;
-    let colorMap = { speed: 0x00ff00, multi: 0xff8800, attract: 0x00ffff };
-    let idx = 0;
-    for (let type of types) {
-      // Remaining time
-      let timer = this.powerupTimer[type];
-      let progress = timer ? (timer.getRemaining() / 8000) : 0;
-      this.powerupBarGraphics.fillStyle(colorMap[type], 1);
-      this.powerupBarGraphics.fillRect(x, y + idx*(barHeight+2), barWidth * progress, barHeight);
-      this.powerupBarGraphics.lineStyle(1, 0xffffff, 1);
-      this.powerupBarGraphics.strokeRect(x, y + idx*(barHeight+2), barWidth, barHeight);
-      idx++;
-    }
-  }
-
-  checkBulletCollisions() {
-    this.bullets.children.each((bullet) => {
-        if (bullet.active) {
-            for (const id in this.others) {
-                const other = this.others[id];
-                if (Phaser.Geom.Intersects.RectangleToRectangle(bullet.getBounds(), other.ship.cont.getBounds())) {
-                    bullet.set_bullet(false);
-                    this.socket.emit("collision", { bullet_user_id: this.id, bullet_index: bullet.index, target_id: id });
-                    this.animate_explosion(id);
-                    other.score = Math.max(0, other.score - 2); // Reduce score
-                    other.ship.score_text.setText(`${other.name}: ${other.score}`);
-                }
-            }
-        }
     });
-  }
-
-  updatePlayerPosition(state, ship, delta) {
-    const speed = 800; // Base speed in pixels per second
-    let dx = 0;
-    let dy = 0;
-
-    // Determine movement direction
-    if (state[0] === "1") dy -= 1; // Up
-    if (state[1] === "1") dy += 1; // Down
-    if (state[2] === "1") dx -= 1; // Left
-    if (state[3] === "1") dx += 1; // Right
-
-    // Normalize diagonal movement
-    const magnitude = Math.sqrt(dx * dx + dy * dy);
-    if (magnitude > 0) {
-        dx /= magnitude;
-        dy /= magnitude;
-    }
-
-    // Set angle based on movement direction
-    if (dx !== 0 || dy !== 0) {
-        const angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
-        ship.ship.setAngle(angle + 90); // Adjust angle to match sprite orientation
-    }
-
-    // Apply movement with time delta factor
-    ship.cont.x += dx * speed * (delta / 1000);
-    ship.cont.y += dy * speed * (delta / 1000);
   }
 
   /*
@@ -1063,11 +1237,16 @@ class PlayGame extends Phaser.Scene {
     });
     var ship = this.add.sprite(0, 0, "ship");
     ship.setAngle(angle);
+    
+    // Create container with both ship sprite and text
     var cont = this.add.container(x, y, [ship, score_text]);
     cont.setSize(45, 45);
+    
+    // Add physics to container only - this is critical!
+    // The container is the sole physics body (holding both ship and text)
     this.physics.add.existing(cont, false);
-    this.physics.add.existing(ship, false);
-    cont.body.setCollideWorldBounds(true);
+    
+    // Store references to all parts for easy access
     return { score_text, ship, cont };
   };
 
@@ -1107,7 +1286,16 @@ class PlayGame extends Phaser.Scene {
     this.coin_sound.play();
     coin.x = Phaser.Math.Between(20, Constants.WIDTH - 20);
     coin.y = Phaser.Math.Between(20, Constants.HEIGHT - 20);
-    this.score += 5;
+    
+    // Increment both coin score and total score
+    this.coinScore += 5;
+    this.score = this.coinScore; // Keep score synced with coin score
+    
+    // Update display
+    if (this.coinScoreText) {
+      this.coinScoreText.setText(`COINS: ${this.coinScore}`);
+    }
+    
     this.ship.score_text.setText(`${this.name}: ${this.score}`);
     this.socket.emit("update_coin", {
       x: coin.x,
@@ -1362,6 +1550,34 @@ class PlayGame extends Phaser.Scene {
     this.powerupTimer[type] = this.time.delayedCall(8000, () => {
       this.powerupState[type] = false;
     });
+  }
+
+  drawPowerupBar() {
+    if (!this.powerupBarGraphics) return;
+    this.powerupBarGraphics.clear();
+    const ship = this.ship;
+    
+    // Ensure ship is valid
+    if (!ship || !ship.cont) return;
+    
+    const barWidth = 60;
+    const barHeight = 8;
+    let y = ship.cont.y - 40;
+    let x = ship.cont.x - barWidth/2;
+    let types = Object.keys(this.powerupState).filter(t => this.powerupState[t]);
+    if (types.length === 0) return;
+    let colorMap = { speed: 0x00ff00, multi: 0xff8800, attract: 0x00ffff };
+    let idx = 0;
+    for (let type of types) {
+      // Remaining time
+      let timer = this.powerupTimer[type];
+      let progress = timer ? (timer.getRemaining() / 8000) : 0;
+      this.powerupBarGraphics.fillStyle(colorMap[type], 1);
+      this.powerupBarGraphics.fillRect(x, y + idx*(barHeight+2), barWidth * progress, barHeight);
+      this.powerupBarGraphics.lineStyle(1, 0xffffff, 1);
+      this.powerupBarGraphics.strokeRect(x, y + idx*(barHeight+2), barWidth, barHeight);
+      idx++;
+    }
   }
 }
 

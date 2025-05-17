@@ -14,6 +14,15 @@ export default class Bullets extends Phaser.Physics.Arcade.Group {
       visible: false,
       classType: Bullet,
     });
+    
+    // Configure bullet physics properties
+    this.children.iterate((bullet) => {
+      if (bullet) {
+        bullet.body.setCircle(bullet.width / 3);
+        bullet.body.onCollide = true; // Enable collision events
+      }
+      return true;
+    });
   }
 
   fireBullet(x, y, angle, shot_fired) {

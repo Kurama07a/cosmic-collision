@@ -54,37 +54,150 @@ const lightFlareShader = {
   `
 };
 
-const config = {
-  type: Phaser.AUTO,
-  scale: {
-    mode: Phaser.Scale.RESIZE,
-    parent: 'game',
-    width: Constants.WIDTH,
-    height: Constants.HEIGHT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
-  },
-  physics: { default: "arcade" },
-  backgroundColor: "#202830",
-  render: {
-    pixelArt: false,
-    antialias: true
-  },
-  // Add custom shaders
-  shaders: [starfieldShader, lightFlareShader]
+// Load WebFont script before initializing the game
+const webFontScript = document.createElement('script');
+webFontScript.src = 'https://ajax.googleapis.com/ajax/libs/webfont/1.6.26/webfont.js';
+document.head.appendChild(webFontScript);
+
+// Create a loading screen element
+const loadingElement = document.createElement('div');
+loadingElement.style.position = 'fixed';
+loadingElement.style.top = '0';
+loadingElement.style.left = '0';
+loadingElement.style.width = '100%';
+loadingElement.style.height = '100%';
+loadingElement.style.backgroundColor = '#202830';
+loadingElement.style.display = 'flex';
+loadingElement.style.flexDirection = 'column';
+loadingElement.style.alignItems = 'center';
+loadingElement.style.justifyContent = 'center';
+loadingElement.style.zIndex = '9999';
+loadingElement.style.color = '#FFE81F';
+loadingElement.style.fontFamily = 'Arial, sans-serif';
+loadingElement.innerHTML = `
+  <h1 style="font-size: 2.5rem; margin-bottom: 2rem;">COSMIC COLLISION</h1>
+  <p style="font-size: 1.2rem; margin-bottom: 2rem;">Loading game assets...</p>
+  <div style="width: 300px; height: 20px; background-color: #000; border: 2px solid #FFE81F; border-radius: 10px; overflow: hidden;">
+    <div id="progressBar" style="width: 0%; height: 100%; background-color: #FFE81F; transition: width 0.3s;"></div>
+  </div>
+`;
+document.body.appendChild(loadingElement);
+
+// Function to start the game once WebFont is loaded
+function startGame() {
+  const config = {
+    type: Phaser.AUTO,
+    scale: {
+      mode: Phaser.Scale.RESIZE,
+      parent: 'game',
+      width: Constants.WIDTH,
+      height: Constants.HEIGHT,
+      autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    physics: { default: "arcade" },
+    backgroundColor: "#202830",
+    render: {
+      pixelArt: false,
+      antialias: true
+    },
+    // Add custom shaders
+    shaders: [starfieldShader, lightFlareShader],
+    // Add a loading callback to track progress
+    callbacks: {
+      postBoot: (game) => {
+        // Track asset loading progress
+        game.events.on('progress', (value) => {
+          const progressBar = document.getElementById('progressBar');
+          if (progressBar) {
+            progressBar.style.width = `${Math.floor(value * 100)}%`;
+          }
+        });
+      }
+    }
+  };
+
+  const game = new Phaser.Game(config);
+
+  game.scene.add("roomselection", RoomSelection);
+  game.scene.add("playgame", PlayGame);
+  game.scene.add("welcome", Welcome);
+  game.scene.add("winner", Winner);
+  game.scene.add("levelselect", LevelSelect);
+  
+  // Start the welcome scene after a short delay to ensure everything is ready
+  game.scene.start("welcome");
+  
+  // When the game is ready, remove the loading screen
+  game.events.on('ready', () => {
+    // Add a slight delay to ensure everything is rendered
+    setTimeout(() => {
+      if (loadingElement && loadingElement.parentNode) {
+        loadingElement.style.opacity = '0';
+        loadingElement.style.transition = 'opacity 1s';
+        setTimeout(() => {
+          loadingElement.parentNode.removeChild(loadingElement);
+        }, 1000);
+      }
+    }, 500);
+  });
+
+  // Listen for resize events to update game dimensions
+  window.addEventListener('resize', () => {
+    // Scale manager handles the resizing automatically
+    // We just need to update any custom UI elements or calculations
+    game.events.emit('resize', Constants.WIDTH, Constants.HEIGHT);
+  });
+}
+
+// Wait for WebFont and then initialize the game
+webFontScript.onload = function() {
+  try {
+    window.WebFont.load({
+      google: {
+        families: ['Exo 2:700,400', 'Rajdhani:500,700']
+      },
+      active: function() {
+        console.log("WebFont loaded successfully");
+        startGame();
+      },
+      inactive: function() {
+        console.warn("WebFont failed to load fonts, using system fonts");
+        startGame();
+      },
+      loading: function() {
+        console.log("WebFont loading...");
+      },
+      fontloading: function(familyName, fvd) {
+        console.log("Loading font: " + familyName);
+        // Update loading progress indicator
+        const progressBar = document.getElementById('progressBar');
+        if (progressBar) {
+          progressBar.style.width = '70%';
+        }
+      },
+      fontactive: function(familyName, fvd) {
+        console.log("Font loaded: " + familyName);
+      },
+      fontinactive: function(familyName, fvd) {
+        console.warn("Failed to load font: " + familyName);
+      }
+    });
+  } catch (error) {
+    console.error("Error during WebFont loading:", error);
+    startGame(); // Fallback to system fonts
+  }
 };
 
-const game = new Phaser.Game(config);
+// Fallback if WebFont fails to load
+webFontScript.onerror = function() {
+  console.warn("WebFont failed to load, using system fonts");
+  startGame();
+};
 
-game.scene.add("roomselection", RoomSelection);
-game.scene.add("playgame", PlayGame);
-game.scene.add("welcome", Welcome);
-game.scene.add("winner", Winner);
-game.scene.add("levelselect", LevelSelect);
-game.scene.start("welcome");
-
-// Listen for resize events to update game dimensions
-window.addEventListener('resize', () => {
-  // Scale manager handles the resizing automatically
-  // We just need to update any custom UI elements or calculations
-  game.events.emit('resize', Constants.WIDTH, Constants.HEIGHT);
-});
+// Set a timeout in case WebFont takes too long
+setTimeout(() => {
+  if (!window.WebFont) {
+    console.warn("WebFont took too long to load, using system fonts");
+    startGame();
+  }
+}, 5000);

@@ -10,6 +10,7 @@ export default class Winner extends Phaser.Scene {
       this.roomName = "Game";
       this.gameMode = "classic";
       this.teamMode = false;
+      this.asteroidMode = false;
     } else {
       // New room-aware format
       this.players = data.players;
@@ -18,6 +19,7 @@ export default class Winner extends Phaser.Scene {
       this.teamMode = data.winningTeam !== undefined;
       this.winningTeam = data.winningTeam;
       this.teamScores = data.teamScores;
+      this.asteroidMode = data.asteroidMode || false;
     }
     
     this.enter = this.input.keyboard.addKey(
@@ -30,6 +32,10 @@ export default class Winner extends Phaser.Scene {
 
   preload() {
     this.load.image('stars', starsBackground);
+    // Load asteroid texture for asteroid mode
+    if (this.gameMode === 'asteroid') {
+      this.load.on('complete', () => this.createAsteroidTextures());
+    }
   }
 
   create() {
@@ -68,6 +74,8 @@ export default class Winner extends Phaser.Scene {
     // Handle winner announcement based on game mode
     if (this.teamMode) {
       this.createTeamWinnerDisplay(container, panel);
+    } else if (this.asteroidMode) {
+      this.createAsteroidWinnerDisplay(container, panel);
     } else {
       this.createIndividualWinnerDisplay(container, panel);
     }
@@ -307,6 +315,175 @@ export default class Winner extends Phaser.Scene {
       container.add([name, score]);
       yPos += 30;
     }
+  }
+  
+  createAsteroidTextures() {
+    const graphics = this.make.graphics({x: 0, y: 0, add: false});
+    graphics.fillStyle(0xaaaaaa, 1);
+    
+    // Create a basic asteroid shape
+    const radius = 20;
+    const points = [];
+    const segments = 10;
+    
+    for (let i = 0; i < segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      const variance = Phaser.Math.Between(85, 115) / 100;
+      const x = Math.cos(angle) * radius * variance;
+      const y = Math.sin(angle) * radius * variance;
+      points.push({ x, y });
+    }
+    
+    graphics.beginPath();
+    graphics.moveTo(points[0].x, points[0].y);
+    
+    for (let i = 1; i < points.length; i++) {
+      graphics.lineTo(points[i].x, points[i].y);
+    }
+    
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.generateTexture('asteroid-icon', radius * 2.5, radius * 2.5);
+  }
+  
+  createAsteroidWinnerDisplay(container, panel) {
+    // Add winner annoucement with pulsing effect
+    const winnerName = this.players[0].name;
+    const winnerText = this.add.text(0, -panel.height/2 + 110, `${winnerName} RULES THE ASTEROID BELT!`, {
+      fontFamily: 'Arial',
+      fontSize: '28px',
+      color: '#FFFFFF',
+      align: 'center'
+    }).setOrigin(0.5);
+    container.add(winnerText);
+
+    // Create pulsing effect for winner text
+    this.tweens.add({
+      targets: winnerText,
+      scale: 1.1,
+      duration: 800,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // Add asteroid icon
+    if (this.textures.exists('asteroid-icon')) {
+      const asteroidIcon = this.add.image(0, -panel.height/2 + 160, 'asteroid-icon')
+        .setScale(1.5);
+      container.add(asteroidIcon);
+      
+      // Add rotation animation
+      this.tweens.add({
+        targets: asteroidIcon,
+        angle: 360,
+        duration: 10000,
+        repeat: -1
+      });
+    }
+
+    // Add scoreboard title
+    const scoreTitle = this.add.text(0, -panel.height/2 + 190, 'ASTEROID HUNTERS', {
+      fontFamily: 'Arial',
+      fontSize: '24px',
+      color: '#00ff00',
+      align: 'center'
+    }).setOrigin(0.5);
+    container.add(scoreTitle);
+
+    // Add divider line
+    const line = this.add.graphics();
+    line.lineStyle(2, 0x00ff00, 1);
+    line.lineBetween(-panel.width/2 + 50, -panel.height/2 + 220, panel.width/2 - 50, -panel.height/2 + 220);
+    container.add(line);
+
+    // Add column headers
+    const rankHeader = this.add.text(-panel.width/2 + 80, -panel.height/2 + 220, "RANK", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#999999',
+      align: 'center'
+    }).setOrigin(0.5);
+    
+    const nameHeader = this.add.text(-panel.width/2 + 180, -panel.height/2 + 220, "PILOT", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#999999',
+      align: 'left'
+    }).setOrigin(0, 0.5);
+    
+    const coinHeader = this.add.text(panel.width/2 - 200, -panel.height/2 + 220, "COINS", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFDD00',
+      align: 'center'
+    }).setOrigin(0.5);
+    
+    const asteroidHeader = this.add.text(panel.width/2 - 70, -panel.height/2 + 220, "DESTROYED", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#999999',
+      align: 'center'
+    }).setOrigin(0.5);
+    
+    container.add([rankHeader, nameHeader, coinHeader, asteroidHeader]);
+
+    // Display scores with proper formatting
+    let yPos = -panel.height/2 + 250;
+    for (let i = 0; i < this.players.length; i++) {
+      const player = this.players[i];
+      const rankColors = ['#FFD700', '#C0C0C0', '#CD7F32', '#FFFFFF'];
+      const color = i < 3 ? rankColors[i] : rankColors[3];
+      
+      const rank = this.add.text(-panel.width/2 + 80, yPos, `${i+1}.`, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: color,
+        align: 'right'
+      }).setOrigin(0.5);
+      
+      const name = this.add.text(-panel.width/2 + 100, yPos, player.name, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: color,
+        align: 'left'
+      }).setOrigin(0, 0.5);
+      
+      // Show both score and asteroids destroyed
+      const score = this.add.text(panel.width/2 - 200, yPos, `${player.score} pts`, {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        color: color,
+        align: 'right'
+      }).setOrigin(1, 0.5);
+      
+      const asteroids = this.add.text(panel.width/2 - 80, yPos, `${player.asteroidsDestroyed || 0}`, {
+        fontFamily: 'Arial',
+        fontSize: '22px', 
+        color: color,
+        align: 'right'
+      }).setOrigin(1, 0.5);
+      
+      // Add small asteroid icon
+      if (this.textures.exists('asteroid-icon')) {
+        const miniIcon = this.add.image(panel.width/2 - 60, yPos, 'asteroid-icon')
+          .setScale(0.6)
+          .setAlpha(0.8);
+        container.add(miniIcon);
+      }
+      
+      container.add([rank, name, score, asteroids]);
+      yPos += 40;
+    }
+    
+    // Explanation of win condition
+    const winConditionText = this.add.text(0, panel.height/2 - 90, 
+      'Victory requires 100+ coins AND most asteroids destroyed!', {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFE81F',
+      align: 'center'
+    }).setOrigin(0.5);
+    container.add(winConditionText);
   }
   
   // Helper method to create a particle texture

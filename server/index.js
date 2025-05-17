@@ -31,7 +31,8 @@ const mainLobby = {
   name: "Free-For-All",
   users: {},
   coin: { x: getRndInteger(50, Constants.WIDTH), y: getRndInteger(50, Constants.HEIGHT) },
-  keystrokeStates: {}
+  keystrokeStates: {},
+  asteroids: new Map() // Add asteroid tracking
 };
 
 // Custom rooms storage
@@ -86,7 +87,8 @@ const createRoom = (name, maxPlayers = 8) => {
     users: {},
     coin: { x: getRndInteger(50, Constants.WIDTH), y: getRndInteger(50, Constants.HEIGHT) },
     keystrokeStates: {},
-    maxPlayers: maxPlayers
+    maxPlayers: maxPlayers,
+    asteroids: new Map() // Add asteroid tracking
   };
   return customRooms[roomId];
 };
@@ -221,6 +223,13 @@ io.on("connect", (socket) => {
     
     if (!room) return;
     
+    // If this is asteroid mode, update the coin score
+    if (room.users[socket.id]) {
+      const player = room.users[socket.id];
+      if (!player.coinScore) player.coinScore = 0;
+      player.coinScore += 5;
+    }
+    
     room.coin = { x: params.x, y: params.y };
     socket.to(roomId).emit("coin_changed", { coin: room.coin });
   });
@@ -279,6 +288,119 @@ io.on("connect", (socket) => {
     // Update room list
     io.emit("available_rooms", getAvailableRooms());
   });
+  
+  // Handle asteroid spawning requests
+  socket.on("spawn_asteroid", () => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    // Generate asteroid data
+    const asteroid = generateAsteroid();
+    room.asteroids.set(asteroid.id, asteroid);
+    
+    // Broadcast to everyone in the room
+    io.to(roomId).emit("new_asteroid", asteroid);
+  });
+  
+  // Handle asteroid splitting
+  socket.on("spawn_asteroid_split", (data) => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    // Create a new asteroid with the provided parameters
+    const asteroid = {
+      id: shortUUID.generate(),
+      size: data.size,
+      x: data.x,
+      y: data.y,
+      vx: data.vx,
+      vy: data.vy,
+      orbitParams: data.orbitParams,
+      createdAt: Date.now()
+    };
+    
+    room.asteroids.set(asteroid.id, asteroid);
+    
+    // Broadcast to everyone in the room
+    io.to(roomId).emit("new_asteroid", asteroid);
+  });
+  
+  // Handle asteroid destruction
+  socket.on("asteroid_destroyed", (data) => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    const { asteroidId, newScore, asteroidsDestroyed, coinScore } = data;
+    
+    // Remove asteroid from room tracking
+    room.asteroids.delete(asteroidId);
+    
+    // Update user score and asteroid count
+    if (room.users[socket.id]) {
+      room.users[socket.id].score = newScore;
+      room.users[socket.id].asteroidsDestroyed = asteroidsDestroyed;
+      room.users[socket.id].coinScore = coinScore;
+    }
+    
+    // Broadcast hit to everyone
+    io.to(roomId).emit("asteroid_hit", {
+      asteroidId,
+      playerId: socket.id,
+      playerScore: newScore,
+      playerAsteroidCount: asteroidsDestroyed,
+      playerCoinScore: coinScore
+    });
+  });
+  
+  // Handle player-asteroid collisions
+  socket.on("player_asteroid_collision", (data) => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    const { asteroidId, newScore, newCoinScore } = data;
+    
+    // Remove asteroid from room tracking
+    room.asteroids.delete(asteroidId);
+    
+    // Update user score
+    if (room.users[socket.id]) {
+      room.users[socket.id].score = newScore;
+      room.users[socket.id].coinScore = newCoinScore;
+    }
+    
+    // Broadcast collision to everyone
+    io.to(roomId).emit("asteroid_hit", {
+      asteroidId,
+      playerId: socket.id,
+      playerScore: newScore,
+      playerCoinScore: newCoinScore
+    });
+  });
+  
+  // Handle requests for initial asteroids
+  socket.on("get_asteroids", () => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    // Convert Map to Array for sending
+    const asteroidList = Array.from(room.asteroids.values());
+    socket.emit("initial_asteroids", asteroidList);
+  });
 });
 
 app.get("/health", (req, res) => res.send(`${process.env.NODE_ENV}`));
@@ -286,3 +408,65 @@ app.get("/health", (req, res) => res.send(`${process.env.NODE_ENV}`));
 server.listen(5000, () => {
   console.log("Server running on port 5000");
 });
+
+// Function to generate random asteroid data
+function generateAsteroid() {
+  // Randomly choose a size
+  const sizes = ['large', 'medium', 'small'];
+  const size = sizes[Math.floor(Math.random() * sizes.length)];
+  
+  // Set position at a random edge of the screen
+  let x, y, vx, vy;
+  const side = Math.floor(Math.random() * 4);
+  
+  switch (side) {
+    case 0: // Top
+      x = Math.random() * Constants.WIDTH;
+      y = -50;
+      vx = Math.random() * 200 - 100;
+      vy = Math.random() * 100 + 50;
+      break;
+    case 1: // Right
+      x = Constants.WIDTH + 50;
+      y = Math.random() * Constants.HEIGHT;
+      vx = -(Math.random() * 100 + 50);
+      vy = Math.random() * 200 - 100;
+      break;
+    case 2: // Bottom
+      x = Math.random() * Constants.WIDTH;
+      y = Constants.HEIGHT + 50;
+      vx = Math.random() * 200 - 100;
+      vy = -(Math.random() * 100 + 50);
+      break;
+    case 3: // Left
+      x = -50;
+      y = Math.random() * Constants.HEIGHT;
+      vx = Math.random() * 100 + 50;
+      vy = Math.random() * 200 - 100;
+      break;
+  }
+  
+  // Generate orbital parameters for predictable motion
+  const orbitParams = {
+    startX: x,
+    startY: y,
+    vx: vx,
+    vy: vy,
+    curvature: (Math.random() * 0.4 + 0.1) * (Math.random() > 0.5 ? 1 : -1),
+    wobble: {
+      amplitude: Math.random() * 15,
+      frequency: Math.random() * 0.4 + 0.1
+    }
+  };
+  
+  return {
+    id: shortUUID.generate(),
+    size,
+    x,
+    y,
+    vx,
+    vy,
+    orbitParams,
+    createdAt: Date.now()
+  };
+}
