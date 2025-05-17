@@ -32,6 +32,10 @@ class PlayGame extends Phaser.Scene {
       this.level = params.level || "classic";
     }
 
+    // Initialize team properties for team deathmatch mode
+    this.team = params.team || null;
+    this.teamScore = { red: 0, blue: 0 };
+
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
       this.ENDPOINT = "localhost:5000";
     } else {
@@ -67,6 +71,34 @@ class PlayGame extends Phaser.Scene {
 
     // Use existing socket if available (from room selection)
     this.socket = window.gameSocket || null;
+
+    // Additional initialization based on game mode
+    this.initializeGameMode();
+  }
+
+  // Initialize specific game mode settings
+  initializeGameMode() {
+    switch(this.level) {
+      case "team":
+        this.friendlyFire = false; // Disable friendly fire for team mode
+        this.teamColors = { red: 0xff0000, blue: 0x0000ff };
+        break;
+      
+      case "asteroid":
+        this.asteroidTimer = null;
+        this.asteroidGroup = null;
+        this.asteroidScore = 0; // Specific score for asteroid destruction
+        break;
+      
+      case "blackhole":
+        // Existing blackhole mode settings already handled
+        break;
+      
+      case "classic":
+      default:
+        // Default settings already handled
+        break;
+    }
   }
 
   preload() {
@@ -88,6 +120,13 @@ class PlayGame extends Phaser.Scene {
     this.load.audio("explosion", ExplosionSound);
     this.load.audio("shot", ShotSound);
     this.load.audio("coin", CoinSound);
+    
+    // Load mode-specific assets
+    if (this.level === "asteroid") {
+      this.load.image('asteroid-large', starsBackground); // Placeholder
+      this.load.image('asteroid-medium', starsBackground); // Placeholder
+      this.load.image('asteroid-small', starsBackground); // Placeholder
+    }
   }
 
   create() {
@@ -139,8 +178,12 @@ class PlayGame extends Phaser.Scene {
     // Create bullet sprite-group
     this.bullets = new Bullets(this);
 
-    // Blackhole level setup
-    if (this.level === "blackhole") {
+    // Initialize mode-specific elements
+    if (this.level === "team") {
+      this.initTeamDeathmatch();
+    } else if (this.level === "asteroid") {
+      this.initAsteroidMode();
+    } else if (this.level === "blackhole") {
       this.initBlackholeLevel();
     }
 
@@ -358,6 +401,431 @@ class PlayGame extends Phaser.Scene {
     this.emit_coordinates();
   }
 
+  initBlackholeLevel() {
+    // Blackhole in center
+    this.blackhole = this.add.sprite(Constants.WIDTH/2, Constants.HEIGHT/2, "blackhole").setScale(0.5).setDepth(2);
+    this.physics.add.existing(this.blackhole, false);
+    this.blackhole.body.setCircle(this.blackhole.width/2 * 0.5);
+
+    // Powerup group
+    this.powerups = this.physics.add.group();
+    this.time.addEvent({
+      delay: 8000,
+      loop: true,
+      callback: () => this.spawnPowerup()
+    });
+
+    // Attract coin effect
+    this.attractRadius = 200;
+
+    // Powerup bar graphics
+    this.powerupBarGraphics = this.add.graphics().setDepth(10);
+
+    // Blackhole physics: add velocity for the ship
+    this.shipVelocity = { x: 0, y: 0 };
+  }
+
+  updateBlackholeLevel(delta) {
+    const dt = delta / 1000;
+    const keys = this.keys;
+    let ship = this.ship;
+    // --- Increased speed ---
+    let speed = this.powerupState.speed ? 4800 : 3500; // was 1200/800
+    let rotSpeed = 120; // was 220
+
+    // --- Respawn logic ---
+    if (this.respawning) {
+      this.respawnLerpT += delta / 800;
+      ship.cont.x = Phaser.Math.Interpolation.Linear([ship.cont.x, this.respawnTarget.x], this.respawnLerpT);
+      ship.cont.y = Phaser.Math.Interpolation.Linear([ship.cont.y, this.respawnTarget.y], this.respawnLerpT);
+      if (this.respawnLerpT >= 1) {
+        this.respawning = false;
+        this.respawnLerpT = 0;
+        ship.ship.setVisible(true);
+        if (ship.cont.setVisible) ship.cont.setVisible(true);
+        // Reset velocity after respawn
+        this.shipVelocity.x = 0;
+        this.shipVelocity.y = 0;
+      }
+      this.drawPowerupBar();
+      this.emit_coordinates();
+      return;
+    }
+
+    // --- Fly controls: up = thrust, left/right = rotate ---
+    if (keys.left.isDown) {
+      ship.ship.angle -= rotSpeed * dt;
+    }
+    if (keys.right.isDown) {
+      ship.ship.angle += rotSpeed * dt;
+    }
+    // Thrust applies acceleration in facing direction
+    if (keys.up.isDown) {
+      const angleRad = Phaser.Math.DegToRad(ship.ship.angle - 90);
+      this.shipVelocity.x += Math.cos(angleRad) * (speed * 0.7) * dt / this.shipMass;
+      this.shipVelocity.y += Math.sin(angleRad) * (speed * 0.7) * dt / this.shipMass;
+    }
+
+    // --- Blackhole gravity (constant for whole screen, increases as you get closer) ---
+    if (this.blackhole) {
+      const dx = this.blackhole.x - ship.cont.x;
+      const dy = this.blackhole.y - ship.cont.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      // No influence radius: always acts
+      // F = G * m1 * m2 / r^2, acceleration = F / m1
+      const force = this.G * this.shipMass * this.blackholeMass / (dist * dist);
+      const ax = (dx / dist) * force / this.shipMass;
+      const ay = (dy / dist) * force / this.shipMass;
+      this.shipVelocity.x += ax * dt;
+      this.shipVelocity.y += ay * dt;
+      // If too close, respawn at edge and lerp
+      if (dist < 40 && !this.respawning) {
+        ship.ship.setVisible(false);
+        for (let type of Object.keys(this.powerupState)) {
+          this.powerupState[type] = false;
+          if (this.powerupTimer[type]) {
+            this.powerupTimer[type].remove();
+            this.powerupTimer[type] = null;
+          }
+        }
+        let edge = Phaser.Math.Between(0, 3);
+        let rx, ry;
+        if (edge === 0) { rx = 10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
+        else if (edge === 1) { rx = Constants.WIDTH-10; ry = Phaser.Math.Between(10, Constants.HEIGHT-10); }
+        else if (edge === 2) { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = 10; }
+        else { rx = Phaser.Math.Between(10, Constants.WIDTH-10); ry = Constants.HEIGHT-10; }
+        this.respawning = true;
+        this.respawnTarget = { x: rx, y: ry };
+        this.respawnLerpT = 0;
+        return;
+      }
+    }
+
+    // --- Apply velocity to ship position ---
+    ship.cont.x += this.shipVelocity.x * dt;
+    ship.cont.y += this.shipVelocity.y * dt;
+
+    // --- Reduced drag for more speed ---
+    this.shipVelocity.x *= 0.955; // was 0.995
+    this.shipVelocity.y *= 0.955;
+
+    // --- Attract coin powerup ---
+    if (this.powerupState.attract && this.coin) {
+      const dx = ship.cont.x - this.coin.x;
+      const dy = ship.cont.y - this.coin.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < this.attractRadius) {
+        this.coin.x += dx/dist * 8;
+        this.coin.y += dy/dist * 8;
+      }
+    }
+
+    // --- Multi-bullet powerup and bullet firing fix ---
+    if (!this.lastSpace) this.lastSpace = false;
+    if (this.space.isDown && !this.lastSpace) {
+      this.shot_sound.play();
+      if (this.powerupState.multi) {
+        for (let spread = -15; spread <= 15; spread += 15) {
+          this.bullets.fireBullet(
+            ship.cont.x,
+            ship.cont.y,
+            ship.ship.angle - 90 + spread,
+            () => {}
+          );
+        }
+      } else {
+        this.bullets.fireBullet(
+          ship.cont.x,
+          ship.cont.y,
+          ship.ship.angle - 90,
+          () => {}
+        );
+      }
+      this.socket.emit("shot", { x: ship.cont.x, y: ship.cont.y });
+      this.lastSpace = true;
+    }
+    if (this.space.isUp) {
+      this.lastSpace = false;
+    }
+
+    // --- Powerup bar ---
+    this.drawPowerupBar();
+
+    this.emit_coordinates();
+  }
+
+  initTeamDeathmatch() {
+    // Create team indicator
+    const teamIndicator = this.add.container(Constants.WIDTH - 150, 80);
+    
+    const teamBg = this.add.rectangle(0, 0, 150, 40, 0x000000, 0.7)
+      .setStrokeStyle(2, this.team === 'red' ? 0xff0000 : 0x0000ff);
+    teamIndicator.add(teamBg);
+    
+    const teamText = this.add.text(0, 0, `TEAM: ${this.team.toUpperCase()}`, {
+      fontFamily: 'Arial',
+      fontSize: '18px',
+      color: this.team === 'red' ? '#ff0000' : '#0000ff',
+      align: 'center'
+    }).setOrigin(0.5);
+    teamIndicator.add(teamText);
+    
+    // Team scoreboard
+    const scoreboard = this.add.container(Constants.WIDTH - 150, 120);
+    
+    const scoreBg = this.add.rectangle(0, 0, 150, 60, 0x000000, 0.7)
+      .setStrokeStyle(1, 0xFFFFFF, 0.5);
+    scoreboard.add(scoreBg);
+    
+    this.redScoreText = this.add.text(-30, -10, "RED: 0", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#ff0000'
+    }).setOrigin(0.5);
+    scoreboard.add(this.redScoreText);
+    
+    this.blueScoreText = this.add.text(-30, 10, "BLUE: 0", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#0000ff'
+    }).setOrigin(0.5);
+    scoreboard.add(this.blueScoreText);
+    
+    // Apply team color to player's ship
+    this.ship.ship.setTint(this.team === 'red' ? 0xff0000 : 0x0000ff);
+    
+    // Listen for team score updates
+    this.socket.on("team_score_update", (scores) => {
+      this.teamScore = scores;
+      this.redScoreText.setText(`RED: ${scores.red}`);
+      this.blueScoreText.setText(`BLUE: ${scores.blue}`);
+      
+      // Check for team win
+      if (scores.red >= Constants.POINTS_TO_WIN || scores.blue >= Constants.POINTS_TO_WIN) {
+        this.handleTeamWin(scores.red > scores.blue ? 'red' : 'blue');
+      }
+    });
+  }
+  
+  initAsteroidMode() {
+    // Create asteroid group
+    this.asteroidGroup = this.physics.add.group();
+    
+    // Start spawning asteroids
+    this.asteroidTimer = this.time.addEvent({
+      delay: 2000,
+      callback: this.spawnAsteroid,
+      callbackScope: this,
+      loop: true
+    });
+    
+    // Add asteroid score display
+    const scoreContainer = this.add.container(Constants.WIDTH - 150, 80);
+    
+    const scoreBg = this.add.rectangle(0, 0, 150, 40, 0x000000, 0.7)
+      .setStrokeStyle(2, 0xFFFFFF, 0.5);
+    scoreContainer.add(scoreBg);
+    
+    this.asteroidScoreText = this.add.text(0, 0, `ASTEROID: 0`, {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFFFFF',
+      align: 'center'
+    }).setOrigin(0.5);
+    scoreContainer.add(this.asteroidScoreText);
+    
+    // Set up collision between bullets and asteroids
+    this.physics.add.collider(this.bullets, this.asteroidGroup, this.hitAsteroid, null, this);
+    
+    // Set up collision between player ship and asteroids
+    this.physics.add.collider(this.ship.ship, this.asteroidGroup, this.playerHitAsteroid, null, this);
+  }
+  
+  // Method to spawn asteroids
+  spawnAsteroid() {
+    if (!this.asteroidGroup) return;
+    
+    // Randomly choose a size
+    const sizes = ['large', 'medium', 'small'];
+    const size = Phaser.Utils.Array.GetRandom(sizes);
+    
+    // Set position at a random edge of the screen
+    let x, y, vx, vy;
+    const side = Phaser.Math.Between(0, 3);
+    
+    switch (side) {
+      case 0: // Top
+        x = Phaser.Math.Between(0, Constants.WIDTH);
+        y = -50;
+        vx = Phaser.Math.Between(-100, 100);
+        vy = Phaser.Math.Between(50, 150);
+        break;
+      case 1: // Right
+        x = Constants.WIDTH + 50;
+        y = Phaser.Math.Between(0, Constants.HEIGHT);
+        vx = Phaser.Math.Between(-150, -50);
+        vy = Phaser.Math.Between(-100, 100);
+        break;
+      case 2: // Bottom
+        x = Phaser.Math.Between(0, Constants.WIDTH);
+        y = Constants.HEIGHT + 50;
+        vx = Phaser.Math.Between(-100, 100);
+        vy = Phaser.Math.Between(-150, -50);
+        break;
+      case 3: // Left
+        x = -50;
+        y = Phaser.Math.Between(0, Constants.HEIGHT);
+        vx = Phaser.Math.Between(50, 150);
+        vy = Phaser.Math.Between(-100, 100);
+        break;
+    }
+    
+    // Create the asteroid
+    const asteroid = this.asteroidGroup.create(x, y, `asteroid-${size}`);
+    asteroid.setVelocity(vx, vy);
+    asteroid.setAngularVelocity(Phaser.Math.Between(-50, 50));
+    asteroid.size = size;
+    asteroid.health = size === 'large' ? 3 : (size === 'medium' ? 2 : 1);
+    
+    // Scale based on size
+    const scale = size === 'large' ? 1 : (size === 'medium' ? 0.65 : 0.4);
+    asteroid.setScale(scale);
+    
+    // Set circular body for better collision detection
+    asteroid.body.setCircle(asteroid.width / 2);
+    
+    // Remove asteroid if it goes off screen for too long
+    this.time.delayedCall(10000, () => {
+      if (asteroid.active) asteroid.destroy();
+    });
+  }
+  
+  // Method to handle bullet hitting asteroid
+  hitAsteroid(bullet, asteroid) {
+    bullet.setActive(false).setVisible(false);
+    
+    asteroid.health--;
+    
+    if (asteroid.health <= 0) {
+      // Explosion effect
+      this.createExplosion(asteroid.x, asteroid.y);
+      
+      // Split into smaller asteroids if large or medium
+      if (asteroid.size !== 'small') {
+        this.splitAsteroid(asteroid);
+      }
+      
+      // Award points
+      const points = asteroid.size === 'large' ? 3 : (asteroid.size === 'medium' ? 2 : 1);
+      this.asteroidScore += points;
+      this.asteroidScoreText.setText(`ASTEROID: ${this.asteroidScore}`);
+      
+      // Destroy the asteroid
+      asteroid.destroy();
+    }
+  }
+  
+  // Method to split asteroids into smaller pieces
+  splitAsteroid(asteroid) {
+    const newSize = asteroid.size === 'large' ? 'medium' : 'small';
+    const count = 2; // Number of pieces to split into
+    
+    for (let i = 0; i < count; i++) {
+      const angle = Phaser.Math.DegToRad(i * (360/count));
+      const speed = 100;
+      
+      const newAsteroid = this.asteroidGroup.create(asteroid.x, asteroid.y, `asteroid-${newSize}`);
+      newAsteroid.size = newSize;
+      newAsteroid.health = newSize === 'medium' ? 2 : 1;
+      
+      // Set velocity in different directions
+      newAsteroid.setVelocity(
+        Math.cos(angle) * speed + asteroid.body.velocity.x * 0.5,
+        Math.sin(angle) * speed + asteroid.body.velocity.y * 0.5
+      );
+      
+      newAsteroid.setAngularVelocity(asteroid.body.angularVelocity + Phaser.Math.Between(-20, 20));
+      
+      // Scale based on size
+      const scale = newSize === 'medium' ? 0.65 : 0.4;
+      newAsteroid.setScale(scale);
+      
+      // Set circular body
+      newAsteroid.body.setCircle(newAsteroid.width / 2);
+      
+      // Remove if off screen too long
+      this.time.delayedCall(10000, () => {
+        if (newAsteroid.active) newAsteroid.destroy();
+      });
+    }
+  }
+  
+  // Method to handle player ship colliding with asteroid
+  playerHitAsteroid(ship, asteroid) {
+    // Create explosion
+    this.createExplosion(ship.x, ship.y);
+    
+    // Reduce player score
+    this.score = Math.max(0, this.score - 5);
+    this.ship.score_text.setText(`${this.name}: ${this.score}`);
+    
+    // Temporarily disable ship
+    ship.setActive(false);
+    this.time.delayedCall(1000, () => {
+      ship.setActive(true);
+    });
+    
+    // Destroy asteroid on impact
+    asteroid.destroy();
+  }
+  
+  // Helper method to create explosion
+  createExplosion(x, y) {
+    const boom = this.add.sprite(x, y, "boom");
+    boom.setDepth(3);
+    boom.anims.play("explode");
+    this.explosion_sound.play();
+    
+    // Remove explosion sprite once animation completes
+    boom.on('animationcomplete', () => {
+      boom.destroy();
+    });
+  }
+  
+  // Method to handle team win condition
+  handleTeamWin(winningTeam) {
+    // Collect player data for winner screen
+    let players = [{ name: this.name, score: this.score, team: this.team }];
+    
+    for (let id in this.others) {
+      players.push({
+        name: this.others[id].name,
+        score: this.others[id].score,
+        team: this.others[id].team || null
+      });
+    }
+    
+    // Sort players by score
+    players.sort((a, b) => b.score - a.score);
+    
+    // Add team information
+    const gameData = {
+      players,
+      roomName: this.roomName,
+      winningTeam: winningTeam,
+      teamScores: this.teamScore
+    };
+    
+    // Disconnect from socket server
+    setTimeout(() => this.socket.disconnect(), 20);
+    
+    // Start winner scene
+    this.scene.start("winner", gameData);
+  }
+
+  /*
+  Blackhole level setup
+  */
   initBlackholeLevel() {
     // Blackhole in center
     this.blackhole = this.add.sprite(Constants.WIDTH/2, Constants.HEIGHT/2, "blackhole").setScale(0.5).setDepth(2);

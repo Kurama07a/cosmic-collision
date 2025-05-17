@@ -21,6 +21,11 @@ export default class RoomSelection extends Phaser.Scene {
       this.selectedLevel = data.level || "classic";
     }
     
+    // Initialize team selection for team mode
+    if (this.selectedLevel === "team") {
+      this.selectedTeam = "red"; // Default team
+    }
+    
     // Determine endpoint
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
       this.ENDPOINT = "localhost:5000";
@@ -55,14 +60,20 @@ export default class RoomSelection extends Phaser.Scene {
       .setStrokeStyle(4, 0xFFE81F);
     this.container.add(this.panel);
     
-    // Add room selection title
-    this.title = this.add.text(0, -this.panel.height / 2 + 40, 'GALACTIC ROOM SELECTION', {
+    // Add room selection title with game mode
+    const modeName = this.getGameModeName(this.selectedLevel);
+    this.title = this.add.text(0, -this.panel.height / 2 + 40, `${modeName.toUpperCase()} - ROOM SELECTION`, {
       fontFamily: 'Arial Black',
       fontSize: '36px',
       color: '#FFE81F',
       align: 'center'
     }).setOrigin(0.5);
     this.container.add(this.title);
+    
+    // Team selection UI for Team Deathmatch mode
+    if (this.selectedLevel === "team") {
+      this.createTeamSelector();
+    }
     
     // Welcome message with player name
     this.welcomeMessage = this.add.text(0, -this.panel.height / 2 + 90, `Welcome, ${this.playerName}!`, {
@@ -87,8 +98,11 @@ export default class RoomSelection extends Phaser.Scene {
     this.container.add(this.roomListContainer);
     
     // Footer with controls info
-    this.controls = this.add.text(0, this.panel.height / 2 - 40, 
-      'UP/DOWN: Navigate | ENTER: Join Room | C: Create Room', {
+    const controlsText = this.selectedLevel === "team" 
+      ? 'UP/DOWN: Navigate | ENTER: Join Room | C: Create Room | T: Switch Team'
+      : 'UP/DOWN: Navigate | ENTER: Join Room | C: Create Room';
+    
+    this.controls = this.add.text(0, this.panel.height / 2 - 40, controlsText, {
       fontFamily: 'Arial',
       fontSize: '16px',
       color: '#AAAAAA',
@@ -139,6 +153,75 @@ export default class RoomSelection extends Phaser.Scene {
         }
       }
     });
+    
+    // Add key for team switching in team mode
+    if (this.selectedLevel === "team") {
+      this.teamKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T);
+    }
+  }
+  
+  // Helper method to get friendly name of game mode
+  getGameModeName(level) {
+    switch(level) {
+      case "classic": return "Classic";
+      case "blackhole": return "Blackhole";
+      case "team": return "Team Deathmatch";
+      case "asteroid": return "Asteroid Field";
+      default: return "Unknown Mode";
+    }
+  }
+  
+  // Create team selection UI
+  createTeamSelector() {
+    this.teamSelectorContainer = this.add.container(0, -this.panel.height / 2 + 180);
+    
+    // Label
+    const teamLabel = this.add.text(-100, 0, "YOUR TEAM:", {
+      fontFamily: 'Arial',
+      fontSize: '18px',
+      color: '#FFFFFF'
+    });
+    
+    // Red team button
+    this.redTeamBtn = this.add.container(0, 0);
+    const redBg = this.add.rectangle(0, 0, 80, 30, 0x880000);
+    redBg.setStrokeStyle(3, 0xFF0000, this.selectedTeam === 'red' ? 1 : 0.3);
+    const redText = this.add.text(0, 0, "RED", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFFFFF'
+    }).setOrigin(0.5);
+    this.redTeamBtn.add([redBg, redText]);
+    this.redTeamBtn.setInteractive(new Phaser.Geom.Rectangle(-40, -15, 80, 30), Phaser.Geom.Rectangle.Contains);
+    
+    // Blue team button
+    this.blueTeamBtn = this.add.container(100, 0);
+    const blueBg = this.add.rectangle(0, 0, 80, 30, 0x000088);
+    blueBg.setStrokeStyle(3, 0x0000FF, this.selectedTeam === 'blue' ? 1 : 0.3);
+    const blueText = this.add.text(0, 0, "BLUE", {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#FFFFFF'
+    }).setOrigin(0.5);
+    this.blueTeamBtn.add([blueBg, blueText]);
+    this.blueTeamBtn.setInteractive(new Phaser.Geom.Rectangle(-40, -15, 80, 30), Phaser.Geom.Rectangle.Contains);
+    
+    // Team selection handlers
+    this.redTeamBtn.on('pointerdown', () => this.selectTeam('red'));
+    this.blueTeamBtn.on('pointerdown', () => this.selectTeam('blue'));
+    
+    this.teamSelectorContainer.add([teamLabel, this.redTeamBtn, this.blueTeamBtn]);
+    this.container.add(this.teamSelectorContainer);
+  }
+  
+  selectTeam(team) {
+    this.selectedTeam = team;
+    
+    // Update UI
+    if (this.redTeamBtn && this.blueTeamBtn) {
+      this.redTeamBtn.list[0].setStrokeStyle(3, 0xFF0000, team === 'red' ? 1 : 0.3);
+      this.blueTeamBtn.list[0].setStrokeStyle(3, 0x0000FF, team === 'blue' ? 1 : 0.3);
+    }
   }
   
   createRoomForm() {
@@ -312,7 +395,17 @@ export default class RoomSelection extends Phaser.Scene {
   }
   
   joinRoom(roomId) {
-    this.socket.emit("join_room", { roomId, name: this.playerName }, (response) => {
+    const joinData = { 
+      roomId, 
+      name: this.playerName
+    };
+    
+    // Add team for team mode
+    if (this.selectedLevel === "team") {
+      joinData.team = this.selectedTeam;
+    }
+    
+    this.socket.emit("join_room", joinData, (response) => {
       if (response.success) {
         // Store socket for the game scene
         window.gameSocket = this.socket;
@@ -321,7 +414,8 @@ export default class RoomSelection extends Phaser.Scene {
           playerName: this.playerName,
           roomId: response.roomId,
           roomName: response.roomName,
-          level: this.selectedLevel
+          level: this.selectedLevel,
+          team: this.selectedTeam // Include team for team mode
         });
       } else {
         this.showErrorMessage(response.message);
@@ -511,6 +605,11 @@ export default class RoomSelection extends Phaser.Scene {
       // Create room shortcut
       if (Phaser.Input.Keyboard.JustDown(this.createKey)) {
         this.toggleCreateRoomForm(true);
+      }
+      
+      // Team switching in team mode
+      if (this.selectedLevel === "team" && Phaser.Input.Keyboard.JustDown(this.teamKey)) {
+        this.selectTeam(this.selectedTeam === 'red' ? 'blue' : 'red');
       }
     }
   }
