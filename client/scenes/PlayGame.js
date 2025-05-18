@@ -1580,19 +1580,19 @@ updateAsteroidLevel(delta, newState) {
     
     // Increment both coin score and total score
     this.coinScore += 5;
-    this.score = this.coinScore; // Keep score synced with coin score
+    this.score = this.coinScore;
     
     // Update display
     if (this.coinScoreText) {
       this.coinScoreText.setText(`COINS: ${this.coinScore}`);
     }
     
-    this.ship.score_text.setText(`${this.name}: ${this.score}`);
+    this.ship.score_text.setText(`${this.name}: ${this.coinScore}`);
     this.socket.emit("update_coin", {
       x: coin.x,
       y: coin.y,
     });
-    this.check_for_winner(this.score);
+    this.check_for_winner(this.coinScore);
   };
 
   /*
