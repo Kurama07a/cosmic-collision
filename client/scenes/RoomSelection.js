@@ -28,9 +28,9 @@ export default class RoomSelection extends Phaser.Scene {
     
     // Determine endpoint
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
-      this.ENDPOINT = "localhost:5000";
+      this.ENDPOINT = "192.168.77.84:5000";
     } else {
-      this.ENDPOINT = "localhost:5000";
+      this.ENDPOINT = "192.168.77.84:5000";
     }
 
     // Initialize input keys

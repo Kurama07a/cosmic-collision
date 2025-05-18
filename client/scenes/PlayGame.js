@@ -37,9 +37,9 @@ class PlayGame extends Phaser.Scene {
     this.teamScore = { red: 0, blue: 0 };
 
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
-      this.ENDPOINT = "localhost:5000";
+      this.ENDPOINT = "192.168.77.84:5000";
     } else {
-      this.ENDPOINT = "localhost:5000";
+      this.ENDPOINT = "192.168.77.84:5000";
     }
 
     this.keys = this.input.keyboard.createCursorKeys();
