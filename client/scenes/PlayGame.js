@@ -64,6 +64,10 @@ class PlayGame extends Phaser.Scene {
     this.powerupBarGraphics = null;
     this.shipVelocity = { x: 0, y: 0 }; // Add for all game modes, not just blackhole
 
+    // Others' powerup states
+    this.othersPowerupState = {};
+    this.othersPowerupTimer = {};
+    
     // Blackhole level properties
     this.blackholeMass = 24000;
     this.shipMass = 1;
@@ -336,6 +340,43 @@ class PlayGame extends Phaser.Scene {
       this.showDisconnectedMessage();
     });
 
+    // Add blackhole mode specific socket events
+    if (this.level === "blackhole") {
+      // Listen for powerup spawns from server
+      this.socket.on("powerup_spawned", (powerupData) => {
+        this.createPowerupFromServer(powerupData);
+      });
+      
+      // Listen for powerup collection by any player
+      this.socket.on("powerup_collected", (data) => {
+        const { id, playerId, playerName, powerupType, expiresAt } = data;
+        
+        // Remove the powerup sprite
+        this.removePowerupById(id);
+        
+        if (playerId === this.id) {
+          // This is us - local handling is already done in collectPowerup
+          // But we should synchronize the timer with the server
+          const remainingTime = expiresAt - Date.now();
+          this.syncPowerupTimer(powerupType, remainingTime);
+        } else {
+          // Handle other player's powerup collection
+          this.setOtherPlayerPowerup(playerId, powerupType, expiresAt);
+        }
+      });
+      
+      // Listen for powerup expiry
+      this.socket.on("powerup_expired", (data) => {
+        this.removePowerupById(data.id);
+      });
+      
+      // Listen for other player's powerup expiry
+      this.socket.on("player_powerup_expired", (data) => {
+        const { playerId, powerupType } = data;
+        this.clearOtherPlayerPowerup(playerId, powerupType);
+      });
+    }
+
     // Add a back button to return to room selection
     this.backButton = this.add.text(
       50, 50, "< BACK", {
@@ -467,10 +508,16 @@ class PlayGame extends Phaser.Scene {
     this.blackhole.body.setCircle(this.blackhole.width/2 * 0.5);
     // Powerup group
     this.powerups = this.physics.add.group();
+    this.powerupMap = new Map(); // Maps powerup id to powerup sprite
+    
+    // Instead of directly spawning powerups, request from the server
     this.time.addEvent({
       delay: 8000,
       loop: true,
-      callback: () => this.spawnPowerup()
+      callback: () => {
+        // Request powerup from server
+        this.socket.emit("request_spawn_powerup");
+      }
     });
 
     // Attract coin effect
@@ -481,6 +528,141 @@ class PlayGame extends Phaser.Scene {
 
     // Blackhole physics: add velocity for the ship
     this.shipVelocity = { x: 0, y: 0 };
+  }
+
+  // Create a powerup from server data
+  createPowerupFromServer(powerupData) {
+    if (!this.powerups) return;
+    
+    const { id, type, x, y } = powerupData;
+    
+    // Create the powerup sprite
+    const powerup = this.powerups.create(x, y, type).setScale(0.5);
+    powerup.id = id;
+    powerup.type = type;
+    powerup.setDepth(2);
+    
+    // Store in map for easy lookup
+    this.powerupMap.set(id, powerup);
+    
+    // Add rotation animation for powerups
+    this.tweens.add({
+      targets: powerup,
+      angle: 360,
+      duration: 3000,
+      repeat: -1,
+      ease: 'Linear'
+    });
+    
+    // Add pulsing effect
+    this.tweens.add({
+      targets: powerup,
+      scale: 0.6,
+      duration: 1000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+    
+    powerup.body.setCircle(20);
+    // Overlap with player
+    this.physics.add.overlap(this.ship.ship, powerup, () => this.collectPowerup(powerup), null, this);
+    
+    return powerup;
+  }
+  
+  // Remove a powerup by ID
+  removePowerupById(id) {
+    if (!this.powerupMap) return;
+    
+    const powerup = this.powerupMap.get(id);
+    if (powerup) {
+      this.tweens.killTweensOf(powerup);
+      powerup.destroy();
+      this.powerupMap.delete(id);
+    }
+  }
+
+  collectPowerup(powerup) {
+    const type = powerup.type;
+    const id = powerup.id;
+    
+    // Add collection effect
+    this.tweens.add({
+      targets: powerup,
+      scale: 0,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => {
+        if (this.powerupMap) {
+          this.powerupMap.delete(id);
+        }
+        powerup.destroy();
+      }
+    });
+    
+    // Update local state
+    this.powerupState[type] = true;
+    if (this.powerupTimer[type]) this.powerupTimer[type].remove();
+    
+    // Powerup lasts 8 seconds locally
+    this.powerupTimer[type] = this.time.delayedCall(8000, () => {
+      this.powerupState[type] = false;
+    });
+    
+    // Notify server of collection
+    this.socket.emit("collect_powerup", { powerupId: id, powerupType: type });
+  }
+  
+  // Synchronize local powerup timer with server
+  syncPowerupTimer(type, remainingTime) {
+    if (this.powerupTimer[type]) {
+      this.powerupTimer[type].remove();
+    }
+    
+    this.powerupState[type] = true;
+    this.powerupTimer[type] = this.time.delayedCall(remainingTime, () => {
+      this.powerupState[type] = false;
+    });
+  }
+  
+  // Set another player's powerup state
+  setOtherPlayerPowerup(playerId, type, expiresAt) {
+    // Initialize player if needed
+    if (!this.othersPowerupState[playerId]) {
+      this.othersPowerupState[playerId] = { speed: false, multi: false, attract: false };
+      this.othersPowerupTimer[playerId] = {};
+    }
+    
+    // Set the powerup state to active
+    this.othersPowerupState[playerId][type] = true;
+    
+    // Clear existing timer if any
+    if (this.othersPowerupTimer[playerId][type]) {
+      this.othersPowerupTimer[playerId][type].remove();
+    }
+    
+    // Set expiry timer
+    const remainingTime = expiresAt - Date.now();
+    if (remainingTime > 0) {
+      this.othersPowerupTimer[playerId][type] = this.time.delayedCall(remainingTime, () => {
+        if (this.othersPowerupState[playerId]) {
+          this.othersPowerupState[playerId][type] = false;
+        }
+      });
+    }
+  }
+  
+  // Clear another player's powerup
+  clearOtherPlayerPowerup(playerId, type) {
+    if (this.othersPowerupState[playerId]) {
+      this.othersPowerupState[playerId][type] = false;
+      
+      if (this.othersPowerupTimer[playerId] && this.othersPowerupTimer[playerId][type]) {
+        this.othersPowerupTimer[playerId][type].remove();
+        this.othersPowerupTimer[playerId][type] = null;
+      }
+    }
   }
 
   updateBlackholeLevel(delta) {
@@ -606,14 +788,72 @@ class PlayGame extends Phaser.Scene {
       this.lastSpace = false;
     }
 
-    // --- Powerup bar ---
-    this.drawPowerupBar();
+    // --- Powerup bar for self and others ---
+    this.drawAllPowerupBars();
 
     this.emit_coordinates();
   }
 
-  // New method to handle asteroid level movement using fly controls
-  updateAsteroidLevel(delta, newState) {
+  drawAllPowerupBars() {
+    if (!this.powerupBarGraphics) return;
+    this.powerupBarGraphics.clear();
+    
+    // Draw powerup bar for self
+    this.drawPowerupBarForPlayer(this.ship.cont, this.powerupState, this.powerupTimer);
+    
+    // Draw powerup bars for other players
+    for (const id in this.others) {
+      if (this.others[id] && this.others[id].ship && this.others[id].ship.cont) {
+        const otherShip = this.others[id].ship.cont;
+        if (this.othersPowerupState[id]) {
+          this.drawPowerupBarForPlayer(
+            otherShip,
+            this.othersPowerupState[id],
+            this.othersPowerupTimer[id] || {}
+          );
+        }
+      }
+    }
+  }
+
+  drawPowerupBarForPlayer(shipContainer, powerupState, powerupTimer) {
+    const barWidth = 60;
+    const barHeight = 8;
+    let y = shipContainer.y - 40;
+    let x = shipContainer.x - barWidth/2;
+    let types = Object.keys(powerupState).filter(t => powerupState[t]);
+    if (types.length === 0) return;
+    
+    let colorMap = { speed: 0x00ff00, multi: 0xff8800, attract: 0x00ffff };
+    let idx = 0;
+    for (let type of types) {
+      // Remaining time
+      let timer = powerupTimer[type];
+      let progress = 1;
+      
+      if (timer && timer.getRemaining) {
+        progress = timer.getRemaining() / 8000;
+      } else if (timer && timer.getElapsed) {
+        progress = 1 - (timer.getElapsed() / 8000);
+      }
+      
+      // Ensure progress is in valid range
+      progress = Math.max(0, Math.min(1, progress));
+      
+      this.powerupBarGraphics.fillStyle(colorMap[type], 1);
+      this.powerupBarGraphics.fillRect(x, y + idx*(barHeight+2), barWidth * progress, barHeight);
+      this.powerupBarGraphics.lineStyle(1, 0xffffff, 1);
+      this.powerupBarGraphics.strokeRect(x, y + idx*(barHeight+2), barWidth, barHeight);
+      idx++;
+    }
+  }
+
+  // Replace existing drawPowerupBar method
+  drawPowerupBar() {
+    this.drawAllPowerupBars();
+  }
+
+updateAsteroidLevel(delta, newState) {
     const dt = delta / 1000;
     const keys = this.keys;
     let ship = this.ship;
@@ -1196,8 +1436,8 @@ class PlayGame extends Phaser.Scene {
     }
     
     // Update total score and score text
-    this.score = this.coinScore; // Update total score to match coin score
-    this.ship.score_text.setText(`${this.name}: ${this.score}`);
+     // Update total score to match coin score
+    this.ship.score_text.setText(`${this.name}: ${this.coinScore}`);
     
     // Mark asteroid as destroyed to prevent multiple hits
     asteroid.destroyed = true;

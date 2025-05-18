@@ -32,7 +32,9 @@ const mainLobby = {
   users: {},
   coin: { x: getRndInteger(50, Constants.WIDTH), y: getRndInteger(50, Constants.HEIGHT) },
   keystrokeStates: {},
-  asteroids: new Map() // Add asteroid tracking
+  asteroids: new Map(), // Add asteroid tracking
+  powerups: {}, // Add powerup tracking
+  powerupTimers: {} // Add powerup timers
 };
 
 // Custom rooms storage
@@ -88,7 +90,9 @@ const createRoom = (name, maxPlayers = 8) => {
     coin: { x: getRndInteger(50, Constants.WIDTH), y: getRndInteger(50, Constants.HEIGHT) },
     keystrokeStates: {},
     maxPlayers: maxPlayers,
-    asteroids: new Map() // Add asteroid tracking
+    asteroids: new Map(), // Add asteroid tracking
+    powerups: {}, // Add powerup tracking
+    powerupTimers: {} // Add powerup timers
   };
   return customRooms[roomId];
 };
@@ -115,6 +119,41 @@ const getAvailableRooms = () => {
   }
   
   return rooms;
+};
+
+// Function to spawn a powerup in a room
+const spawnPowerup = (room) => {
+  // Randomly pick a type
+  const types = ["speed", "multi", "attract"];
+  const type = types[Math.floor(Math.random() * types.length)];
+  const x = getRndInteger(60, Constants.WIDTH - 60);
+  const y = getRndInteger(60, Constants.HEIGHT - 60);
+  const powerupId = shortUUID.generate();
+  
+  // Create powerup data
+  const powerup = {
+    id: powerupId,
+    type,
+    x,
+    y,
+    createdAt: Date.now()
+  };
+  
+  // Store in room's powerups
+  room.powerups[powerupId] = powerup;
+  
+  // Set a timer to automatically remove the powerup if not collected
+  room.powerupTimers[powerupId] = setTimeout(() => {
+    if (room.powerups[powerupId]) {
+      delete room.powerups[powerupId];
+      io.to(room.id).emit('powerup_expired', { id: powerupId });
+    }
+  }, 20000); // Expire after 20 seconds if not collected
+  
+  // Broadcast to all clients in the room
+  io.to(room.id).emit('powerup_spawned', powerup);
+  
+  return powerup;
 };
 
 io.on("connect", (socket) => {
@@ -256,12 +295,14 @@ io.on("connect", (socket) => {
     
     if (!room) return;
     
+    // Include powerup data in the initialization
     socket.emit("to_new_user", {
       id: socket.id,
       coin: room.coin,
       others: room.users,
       roomId: room.id,
-      roomName: room.name
+      roomName: room.name,
+      powerups: room.powerups
     });
   });
 
@@ -400,6 +441,75 @@ io.on("connect", (socket) => {
     // Convert Map to Array for sending
     const asteroidList = Array.from(room.asteroids.values());
     socket.emit("initial_asteroids", asteroidList);
+  });
+
+  // Handle powerup spawning in blackhole mode
+  socket.on("request_spawn_powerup", (params) => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    // Only the first connected player can initiate powerup spawns
+    // to avoid multiple spawns from different clients
+    const roomPlayers = Object.keys(room.users);
+    if (roomPlayers.length === 0 || roomPlayers[0] !== socket.id) return;
+    
+    spawnPowerup(room);
+  });
+  
+  // Handle powerup collection
+  socket.on("collect_powerup", ({ powerupId, powerupType }) => {
+    const roomId = playerRooms[socket.id];
+    if (!roomId) return;
+    
+    const room = getRoom(roomId);
+    if (!room || !room.powerups[powerupId]) return;
+    
+    // Remove the powerup from the room
+    const powerup = room.powerups[powerupId];
+    delete room.powerups[powerupId];
+    
+    // Clear the expiry timer
+    if (room.powerupTimers[powerupId]) {
+      clearTimeout(room.powerupTimers[powerupId]);
+      delete room.powerupTimers[powerupId];
+    }
+    
+    // Update the user's powerup state
+    if (!room.users[socket.id].powerups) {
+      room.users[socket.id].powerups = {};
+    }
+    
+    room.users[socket.id].powerups[powerupType] = {
+      active: true,
+      expiresAt: Date.now() + 8000 // 8 seconds
+    };
+    
+    // Schedule powerup expiry
+    setTimeout(() => {
+      if (room.users[socket.id] && 
+          room.users[socket.id].powerups && 
+          room.users[socket.id].powerups[powerupType]) {
+        room.users[socket.id].powerups[powerupType].active = false;
+        
+        // Broadcast the powerup expiry
+        io.to(roomId).emit('player_powerup_expired', { 
+          playerId: socket.id, 
+          powerupType
+        });
+      }
+    }, 8000);
+    
+    // Broadcast to everyone that this player collected the powerup
+    io.to(roomId).emit('powerup_collected', { 
+      id: powerupId, 
+      playerId: socket.id,
+      playerName: room.users[socket.id].name,
+      powerupType,
+      expiresAt: Date.now() + 8000
+    });
   });
 });
 
