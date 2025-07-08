@@ -32,6 +32,7 @@ module.exports = {
     }),
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
+      'process.env.ENDPOINT': JSON.stringify(process.env.ENDPOINT || 'http://localhost:5000'),
     }),
   ],
   devServer: {

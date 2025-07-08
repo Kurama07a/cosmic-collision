@@ -37,9 +37,9 @@ class PlayGame extends Phaser.Scene {
     this.teamScore = { red: 0, blue: 0 };
 
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
-      this.ENDPOINT = "192.168.77.84:5000";
+      this.ENDPOINT = "http://localhost:5000";
     } else {
-      this.ENDPOINT = "192.168.77.84:5000";
+      this.ENDPOINT = process.env.ENDPOINT || window.location.origin;
     }
 
     this.keys = this.input.keyboard.createCursorKeys();
@@ -499,7 +499,54 @@ class PlayGame extends Phaser.Scene {
   }
 
   // Add the movement function that was missing
-  
+  movePlayerBasedOnKeystroke(keystrokeState, playerShip, delta) {
+    // Base speed (pixels per frame)
+    const baseSpeed = 5 * (delta / 16.667); // Scale with frame delta for consistent speed
+    
+    // Movement based on keystroke state binary string
+    // Format: "UDLRF" (Up, Down, Left, Right, Fire)
+    const up = keystrokeState[0] === "1";
+    const down = keystrokeState[1] === "1";
+    const left = keystrokeState[2] === "1";
+    const right = keystrokeState[3] === "1";
+    
+    // Apply movement
+    if (up) playerShip.cont.y -= baseSpeed;
+    if (down) playerShip.cont.y += baseSpeed;
+    if (left) playerShip.cont.x -= baseSpeed;
+    if (right) playerShip.cont.x += baseSpeed;
+    
+    // Keep player in bounds
+    playerShip.cont.x = Phaser.Math.Clamp(
+      playerShip.cont.x,
+      25,
+      Constants.WIDTH - 25
+    );
+    playerShip.cont.y = Phaser.Math.Clamp(
+      playerShip.cont.y,
+      25,
+      Constants.HEIGHT - 25
+    );
+    
+    // Update ship rotation based on movement direction
+    if (left || right || up || down) {
+      let angle = 0;
+      if (up) {
+        angle = 180; // Changed from -90 to 180 for upward movement
+        if (right) angle -= 45; // Adjusted rotation direction
+        if (left) angle += 45;  // Adjusted rotation direction
+      } else if (down) {
+        angle = 0;  // Changed from 90 to 0 for downward movement
+        if (right) angle += 45;
+        if (left) angle -= 45;
+      } else if (right) {
+        angle = 270; // Changed from 0 to 270 for rightward movement
+      } else if (left) {
+        angle = 90;  // Changed from 180 to 90 for leftward movement
+      }
+      playerShip.ship.setAngle(angle+180);
+    }
+  }
   
   initBlackholeLevel() {
     // Blackhole in center
@@ -1003,11 +1050,13 @@ updateAsteroidLevel(delta, newState) {
     
     // Start spawning asteroids - server will control actual spawning
     this.asteroidTimer = this.time.addEvent({
-      delay: 2000,
+      delay: 1000,
       callback: () => {
         if (this.socket && this.id === this.getLowestPlayerId()) {
           // Only one client should initiate asteroid creation
-          this.requestNewAsteroid();
+          for (let i = 0; i < 3; i++) {
+            this.requestNewAsteroid();
+          }
         }
       },
       callbackScope: this,
@@ -1524,23 +1573,45 @@ updateAsteroidLevel(delta, newState) {
   spaceship sprite, name and score.
   */
   get_new_spaceship = (x, y, score, name, angle) => {
-    var randomColor = Phaser.Display.Color.RandomRGB()._color; // Generate a random color
-    var score_text = this.add.text(-30, 25, `${name}: ${score}`, {
-      color: "#00FF00",
-      fontFamily: "Arial",
-      align: "center",
-      fontSize: "13px",
-    });
-    var ship = this.add.sprite(0, 0, "ship");
-    ship.setAngle(angle);
-    var cont = this.add.container(x, y, [ship, score_text]);
-    cont.setSize(45, 45);
-    this.physics.add.existing(cont, false);
-    this.physics.add.existing(ship, false);
-    cont.body.setCollideWorldBounds(true);
-    return { score_text, ship, cont };
-  };
+  // Generate consistent color based on player name or ID
+  const color = this.getPlayerColor(name);
+  
+  var score_text = this.add.text(-30, 25, `${name}: ${score}`, {
+    color: "#00FF00",
+    fontFamily: "Arial",
+    align: "center",
+    fontSize: "13px",
+  });
+  
+  var ship = this.add.sprite(0, 0, "ship");
+  ship.setAngle(angle);
+  // Apply the color tint to the ship
+  ship.setTint(color);
+  
+  var cont = this.add.container(x, y, [ship, score_text]);
+  cont.setSize(45, 45);
+  this.physics.add.existing(cont, false);
+  this.physics.add.existing(ship, false);
+  cont.body.setCollideWorldBounds(true);
+  return { score_text, ship, cont };
+};
 
+// Add this new method to generate consistent colors
+getPlayerColor = (name) => {
+  // Use a simple hash function to generate a color from the name
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  // Convert hash to RGB color and ensure minimum brightness
+  const r = Math.min(255, Math.max(64, ((hash & 0xFF0000) >> 16))); // Range 128-255
+  const g = Math.min(255, Math.max(64, ((hash & 0x00FF00) >> 8)));  // Range 128-255
+  const b = Math.min(255, Math.max(64, (hash & 0x0000FF)));         // Range 128-255
+  
+  // Create color integer for Phaser
+  return (r << 16) | (g << 8) | b;
+};
   /*
   Upon movement, inform the server of new coordinates.
   */

@@ -14,7 +14,8 @@
   },
   "scripts": {
     "build": "npx webpack",
-    "start": "nodemon server"
+    "start": "npm run build && node server/index.js",
+    "dev": "nodemon server"
   },
   "browserslist": {
     "production": [
