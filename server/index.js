@@ -515,8 +515,8 @@ io.on("connect", (socket) => {
 
 app.get("/health", (req, res) => res.send(`${process.env.NODE_ENV}`));
 
-server.listen(process.env.PORT || 5000, '0.0.0.0' ,() => {
-  console.log(`Server running on port ${process.env.PORT || 5000}`);
+server.listen(process.env.PORT || 10000, '0.0.0.0' ,() => {
+  console.log(`Server running on port ${process.env.PORT || 10000}`);
 });
 
 // Function to generate random asteroid data

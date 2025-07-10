@@ -2,6 +2,10 @@
   "name": "phaser-mp",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
   "dependencies": {
     "concurrently": "^5.2.0",
     "cors": "^2.8.5",
@@ -12,10 +16,15 @@
     "socket.io": "^2.2.0",
     "socket.io-client": "^2.2.0"
   },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
   "scripts": {
-    "build": "npx webpack",
-    "start": "npm run build && node server/index.js",
-    "dev": "nodemon server"
+    "build": "npx webpack --mode production",
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "postinstall": "npm run build"
   },
   "browserslist": {
     "production": [

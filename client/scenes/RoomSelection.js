@@ -28,7 +28,7 @@ export default class RoomSelection extends Phaser.Scene {
     
     // Determine endpoint
     if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
-      this.ENDPOINT = "http://localhost:5000";
+      this.ENDPOINT = "http://localhost:10000";
     } else {
       this.ENDPOINT = process.env.ENDPOINT || window.location.origin;
     }
